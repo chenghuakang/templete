@@ -11,19 +11,27 @@ public:
     I begin=0,end=0,step=0;J nodes;
     // Upstream v3.5 optional annotation keys (case_name, rf_parameters). Pass-through only: never a link-model input.
     J upstream_case=J::obj();
+    // Canonical provenance (SDD §11/13.2): upstream run_id reference, actual backend, input manifest SHA.
+    std::string upstream_run_id,actual_backend,input_manifest_sha256;
     Input(const fs::path&input,U memory):budget(memory){
         fs::path manifest=fs::is_directory(input)?input/"manifest.json":input;J entries=J::arr();
         if(input.extension()==".ngb"){
             auto stem=input.stem();stem+=".sbin";fs::path orbit;
             for(auto p:{input.parent_path()/"orbits"/stem,input.parent_path()/"orbits/samples"/stem,input.parent_path().parent_path()/"orbits"/stem,input.parent_path().parent_path()/"orbits/samples"/stem})if(fs::exists(p)){orbit=p;break;}
             need(!orbit.empty(),7,"source","bound orbit not found");packages.push_back({input,orbit,0,0,0,0,0,0});
+            input_manifest_sha256=hex(filesha(input));
         }else{
             auto m=json(readtext(manifest));need(m.at("format").str()=="SATNET-1.1",7,"manifest","format");entries=m.at("products");need(entries.type==J::Arr&&!entries.a.empty(),7,"manifest","empty products");
+            input_manifest_sha256=hex(filesha(manifest));
+            if(m.o.count("run")&&m.at("run").o.count("run_id"))upstream_run_id=m.at("run").at("run_id").str();
             for(auto&e:entries.a){auto g=relative_path(manifest.parent_path(),e.at("graph_file").str()),o=relative_path(manifest.parent_path(),e.at("source_file").str());need(g.extension()==".ngb"&&o.extension()==".sbin",7,"path","unexpected product extension");need(hex(filesha(g))==e.at("graph_sha256").str()&&hex(filesha(o))==e.at("source_sha256").str(),7,"manifest","SHA mismatch");packages.push_back({g,o,0,0,0,0,0,0});}
         }
         for(size_t i=0;i<packages.size();++i){auto&p=packages[i];Graph g=graphread(p.graph,budget/3,p.orbit);Orbit o=readorbit(p.orbit,budget/3);need(get(g.b,10,2)==1&&get(g.b,16,4)==0,7,"graph","strict bound minor1 required");
             p.k=g.k0;p.M=g.M;p.t0=g.t0;p.step=g.step;p.start=o.start;p.end=o.end;
-            if(i==0){begin=o.start;end=o.end;step=o.step;nodes=g.meta.at("nodes");for(auto key:{"case_name","rf_parameters"})if(g.meta.o.count(key))upstream_case[key]=g.meta.at(key);}
+            if(i==0){begin=o.start;end=o.end;step=o.step;nodes=g.meta.at("nodes");for(auto key:{"case_name","rf_parameters"})if(g.meta.o.count(key))upstream_case[key]=g.meta.at(key);
+                if(upstream_run_id.empty()&&g.meta.o.count("run_id"))upstream_run_id=g.meta.at("run_id").str();
+                actual_backend=g.meta.o.count("actual_backend")?g.meta.at("actual_backend").str():"cpu";
+            }
             else for(auto key:{"case_name","rf_parameters"})need((g.meta.o.count(key)>0)==(upstream_case.o.count(key)>0)&&(!g.meta.o.count(key)||g.meta.at(key).dump()==upstream_case.at(key).dump()),7,"packages","upstream case annotation mismatch across packages");
             need(o.start==begin&&o.end==end&&o.step==step&&g.meta.at("nodes").dump()==nodes.dump(),7,"packages","nodes/time mismatch");
         }

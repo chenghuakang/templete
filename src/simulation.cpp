@@ -1013,6 +1013,12 @@ namespace unified {
             manifest["start_ns"]=begin;
             manifest["end_ns"]=end;
             manifest["actual_completed_virtual_end_ns"]=end;
+            manifest["origin_ns"]=begin;
+            if(!reader.upstream_run_id.empty())manifest["upstream_run_id"]=reader.upstream_run_id;
+            if(!reader.input_manifest_sha256.empty())manifest["input_manifest_sha256"]=reader.input_manifest_sha256;
+            manifest["actual_backend"]=reader.actual_backend.empty()?"cpu":reader.actual_backend;
+            manifest["seed"]=opts.v.at("policy-seed");
+            manifest["approximate"]=false;
             manifest["result"]=result;
             manifest["effective_config"]=config(opts);
             J hp=J::obj();
