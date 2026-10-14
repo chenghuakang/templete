@@ -1,0 +1,375 @@
+{
+ "status": "PASS",
+ "tests": [
+  {
+   "test": "compile-hypersim",
+   "status": "PASS",
+   "seconds": 17.76,
+   "detail": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "compile-hsn-traceroute",
+   "status": "PASS",
+   "seconds": 14.164,
+   "detail": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "compile-traceroute-unit",
+   "status": "PASS",
+   "seconds": 1.566,
+   "detail": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "compile-satcore",
+   "status": "PASS",
+   "seconds": 11.524,
+   "detail": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "link-satpred",
+   "status": "PASS",
+   "seconds": 0.068,
+   "detail": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "link-satnet",
+   "status": "PASS",
+   "seconds": 0.065,
+   "detail": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "link-satread",
+   "status": "PASS",
+   "seconds": 0.061,
+   "detail": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "link-netread",
+   "status": "PASS",
+   "seconds": 0.061,
+   "detail": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "link-satdemo",
+   "status": "PASS",
+   "seconds": 0.06,
+   "detail": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "link-orbit_engine",
+   "status": "PASS",
+   "seconds": 0.064,
+   "detail": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "traceroute-25-unit-checks",
+   "status": "PASS",
+   "seconds": 0.002,
+   "detail": {
+    "exit": 0,
+    "stdout": "TRACEROUTE_TESTS_PASS 25\ntraceroute to 10.0.0.2 (10.0.0.2), 32 hops max, 60 byte packets\n 1  10.0.0.1 (10.0.0.1)  5.000 ms  5.000 ms  5.000 ms\n 2  10.0.0.2 (10.0.0.2)  10.000 ms  10.000 ms  10.000 ms\n",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "hash-time-selftest",
+   "status": "PASS",
+   "seconds": 0.002,
+   "detail": {
+    "exit": 0,
+    "stdout": "SELFTEST_OK\n",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "fluid",
+   "status": "PASS",
+   "seconds": 0.004,
+   "detail": {
+    "exit": 0,
+    "stdout": "run=/tmp/UnifiedSatNet_finish_n338foil/runs/fluid SOURCE_VERIFIED\n{\"censored_payload_bytes\":0,\"completed_traceroutes\":0,\"delivered_payload_bytes\":1250000,\"dst\":2,\"end_ns\":1767225620000000000,\"format\":\"unified-network-simulation-1\",\"goodput_bps\":5e+05,\"model\":\"single-flow-fluid-v1\",\"offered_payload_bytes\":2500000,\"offered_rate_bps\":1000000,\"reached_traceroutes\":0,\"src\":0,\"start_ns\":1767225600000000000,\"unserved_payload_bytes\":1250000,\"virtual_duration_ns\":20000000000}\n",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "host-delay",
+   "status": "PASS",
+   "seconds": 0.204,
+   "detail": {
+    "exit": 0,
+    "stdout": "run=/tmp/UnifiedSatNet_finish_n338foil/runs/host-delay SOURCE_VERIFIED\n{\"censored_payload_bytes\":0,\"completed_traceroutes\":0,\"delivered_payload_bytes\":1250000,\"dst\":2,\"end_ns\":1767225620000000000,\"format\":\"unified-network-simulation-1\",\"goodput_bps\":5e+05,\"model\":\"single-flow-fluid-v1\",\"offered_payload_bytes\":2500000,\"offered_rate_bps\":1000000,\"reached_traceroutes\":0,\"src\":0,\"start_ns\":1767225600000000000,\"unserved_payload_bytes\":1250000,\"virtual_duration_ns\":20000000000}\n",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "time-isolation-business.jsonl",
+   "status": "PASS",
+   "seconds": 0.0,
+   "detail": true
+  },
+  {
+   "test": "time-isolation-statistics.jsonl",
+   "status": "PASS",
+   "seconds": 0.0,
+   "detail": true
+  },
+  {
+   "test": "time-isolation-traceroute.txt",
+   "status": "PASS",
+   "seconds": 0.0,
+   "detail": true
+  },
+  {
+   "test": "time-isolation-traceroute.jsonl",
+   "status": "PASS",
+   "seconds": 0.0,
+   "detail": true
+  },
+  {
+   "test": "time-isolation-result.json",
+   "status": "PASS",
+   "seconds": 0.0,
+   "detail": true
+  },
+  {
+   "test": "packet",
+   "status": "PASS",
+   "seconds": 0.005,
+   "detail": {
+    "exit": 0,
+    "stdout": "run=/tmp/UnifiedSatNet_finish_n338foil/runs/packet SOURCE_VERIFIED\n{\"censored_packets\":0,\"censored_payload_bytes\":0,\"completed_traceroutes\":0,\"delivered_packets\":1042,\"delivered_payload_bytes\":1250400,\"dropped_packets\":1042,\"dst\":2,\"end_ns\":1767225620000000000,\"format\":\"unified-network-simulation-1\",\"generated_packets\":2084,\"goodput_bps\":500160,\"hop_limit_drop_packets\":0,\"link_down_drop_packets\":0,\"model\":\"udp-packet-v1\",\"offered_payload_bytes\":2500800,\"offered_rate_bps\":1000000,\"queue_drop_packets\":0,\"reached_traceroutes\":0,\"src\":0,\"start_ns\":1767225600000000000,\"unreachable_drop_packets\":1042,\"unserved_payload_bytes\":1250400,\"virtual_duration_ns\":20000000000}\n",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "unknown",
+   "status": "PASS",
+   "seconds": 0.001,
+   "detail": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "{\"code\":1,\"where\":\"cli\",\"message\":\"unknown/duplicate option wrong\"}\n"
+   }
+  },
+  {
+   "test": "tcp",
+   "status": "PASS",
+   "seconds": 0.001,
+   "detail": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "{\"code\":1,\"where\":\"protocol\",\"message\":\"TCP not implemented\"}\n"
+   }
+  },
+  {
+   "test": "negative",
+   "status": "PASS",
+   "seconds": 0.001,
+   "detail": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "{\"code\":1,\"where\":\"time\",\"message\":\"traceroute-timeout-s must be positive\"}\n"
+   }
+  },
+  {
+   "test": "window",
+   "status": "PASS",
+   "seconds": 0.002,
+   "detail": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": "{\"code\":1,\"where\":\"window\",\"message\":\"end outside source range\"}\n"
+   }
+  },
+  {
+   "test": "manifest",
+   "status": "PASS",
+   "seconds": 0.003,
+   "detail": {
+    "exit": 0,
+    "stdout": "run=/tmp/UnifiedSatNet_finish_n338foil/runs/manifest SOURCE_VERIFIED\n{\"censored_payload_bytes\":0,\"completed_traceroutes\":0,\"delivered_payload_bytes\":1250000,\"dst\":2,\"end_ns\":1767225620000000000,\"format\":\"unified-network-simulation-1\",\"goodput_bps\":5e+05,\"model\":\"single-flow-fluid-v1\",\"offered_payload_bytes\":2500000,\"offered_rate_bps\":1000000,\"reached_traceroutes\":0,\"src\":0,\"start_ns\":1767225600000000000,\"unserved_payload_bytes\":1250000,\"virtual_duration_ns\":20000000000}\n",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "single-graph",
+   "status": "PASS",
+   "seconds": 0.003,
+   "detail": {
+    "exit": 0,
+    "stdout": "run=/tmp/UnifiedSatNet_finish_n338foil/runs/single-graph SOURCE_VERIFIED\n{\"censored_payload_bytes\":0,\"completed_traceroutes\":0,\"delivered_payload_bytes\":1250000,\"dst\":2,\"end_ns\":1767225620000000000,\"format\":\"unified-network-simulation-1\",\"goodput_bps\":5e+05,\"model\":\"single-flow-fluid-v1\",\"offered_payload_bytes\":2500000,\"offered_rate_bps\":1000000,\"reached_traceroutes\":0,\"src\":0,\"start_ns\":1767225600000000000,\"unserved_payload_bytes\":1250000,\"virtual_duration_ns\":20000000000}\n",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "full-trace",
+   "status": "PASS",
+   "seconds": 0.003,
+   "detail": {
+    "exit": 0,
+    "stdout": "run=/tmp/UnifiedSatNet_finish_n338foil/runs/full-trace SOURCE_VERIFIED\n{\"censored_payload_bytes\":375,\"completed_traceroutes\":2,\"delivered_payload_bytes\":2499625,\"dst\":2,\"end_ns\":1767225620000000000,\"format\":\"unified-network-simulation-1\",\"goodput_bps\":999850,\"model\":\"single-flow-fluid-v1\",\"offered_payload_bytes\":2500000,\"offered_rate_bps\":1000000,\"reached_traceroutes\":2,\"src\":0,\"start_ns\":1767225600000000000,\"unserved_payload_bytes\":0,\"virtual_duration_ns\":20000000000}\n",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "standalone-trace",
+   "status": "PASS",
+   "seconds": 0.002,
+   "detail": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "propagation-survives",
+   "status": "PASS",
+   "seconds": 0.003,
+   "detail": {
+    "exit": 0,
+    "stdout": "run=/tmp/UnifiedSatNet_finish_n338foil/runs/propagation-survives SOURCE_VERIFIED\n{\"censored_packets\":0,\"censored_payload_bytes\":0,\"completed_traceroutes\":0,\"delivered_packets\":10,\"delivered_payload_bytes\":12000,\"dropped_packets\":10,\"dst\":1,\"end_ns\":1767225620000000000,\"format\":\"unified-network-simulation-1\",\"generated_packets\":20,\"goodput_bps\":4800,\"hop_limit_drop_packets\":0,\"link_down_drop_packets\":0,\"model\":\"udp-packet-v1\",\"offered_payload_bytes\":24000,\"offered_rate_bps\":9600,\"queue_drop_packets\":0,\"reached_traceroutes\":0,\"src\":0,\"start_ns\":1767225600000000000,\"unreachable_drop_packets\":10,\"unserved_payload_bytes\":12000,\"virtual_duration_ns\":20000000000}\n",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "exact-service-boundary",
+   "status": "PASS",
+   "seconds": 0.003,
+   "detail": {
+    "exit": 0,
+    "stdout": "run=/tmp/UnifiedSatNet_finish_n338foil/runs/exact-service-boundary SOURCE_VERIFIED\n{\"censored_packets\":0,\"censored_payload_bytes\":0,\"completed_traceroutes\":0,\"delivered_packets\":1,\"delivered_payload_bytes\":1222,\"dropped_packets\":2,\"dst\":1,\"end_ns\":1767225620000000000,\"format\":\"unified-network-simulation-1\",\"generated_packets\":3,\"goodput_bps\":488.8,\"hop_limit_drop_packets\":0,\"link_down_drop_packets\":1,\"model\":\"udp-packet-v1\",\"offered_payload_bytes\":3666,\"offered_rate_bps\":1000,\"queue_drop_packets\":0,\"reached_traceroutes\":0,\"src\":0,\"start_ns\":1767225600000000000,\"unreachable_drop_packets\":1,\"unserved_payload_bytes\":2444,\"virtual_duration_ns\":20000000000}\n",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "queue-congestion",
+   "status": "PASS",
+   "seconds": 0.004,
+   "detail": {
+    "exit": 0,
+    "stdout": "run=/tmp/UnifiedSatNet_finish_n338foil/runs/queue-congestion SOURCE_VERIFIED\n{\"censored_packets\":3,\"censored_payload_bytes\":3600,\"completed_traceroutes\":0,\"delivered_packets\":81,\"delivered_payload_bytes\":97200,\"dropped_packets\":2000,\"dst\":1,\"end_ns\":1767225620000000000,\"format\":\"unified-network-simulation-1\",\"generated_packets\":2084,\"goodput_bps\":38880,\"hop_limit_drop_packets\":0,\"link_down_drop_packets\":0,\"model\":\"udp-packet-v1\",\"offered_payload_bytes\":2500800,\"offered_rate_bps\":1000000,\"queue_drop_packets\":2000,\"reached_traceroutes\":0,\"src\":0,\"start_ns\":1767225600000000000,\"unreachable_drop_packets\":0,\"unserved_payload_bytes\":2400000,\"virtual_duration_ns\":20000000000}\n",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "no-traffic",
+   "status": "PASS",
+   "seconds": 0.003,
+   "detail": {
+    "exit": 0,
+    "stdout": "run=/tmp/UnifiedSatNet_finish_n338foil/runs/no-traffic SOURCE_VERIFIED\n{\"censored_payload_bytes\":0,\"completed_traceroutes\":0,\"delivered_payload_bytes\":0,\"dst\":null,\"end_ns\":1767225620000000000,\"format\":\"unified-network-simulation-1\",\"goodput_bps\":0,\"model\":\"single-flow-fluid-v1\",\"offered_payload_bytes\":0,\"offered_rate_bps\":1000000,\"reached_traceroutes\":0,\"src\":null,\"start_ns\":1767225600000000000,\"unserved_payload_bytes\":0,\"virtual_duration_ns\":20000000000}\n",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "SHA-tamper",
+   "status": "PASS",
+   "seconds": 0.002,
+   "detail": {
+    "exit": 7,
+    "stdout": "",
+    "stderr": "{\"code\":7,\"where\":\"manifest\",\"message\":\"SHA mismatch\"}\n"
+   }
+  },
+  {
+   "test": "zero-argument-24h",
+   "status": "PASS",
+   "seconds": 95.243,
+   "detail": {
+    "exit": 0,
+    "stdout": "run=/tmp/UnifiedSatNet_finish_n338foil/hsn-home/runs/run_000001/network_input/orbits SATC_INTEGRITY_OK\nrun=/tmp/UnifiedSatNet_finish_n338foil/hsn-home/runs/run_000001/network_input samples=8640 packages=24 graphs=24 directed_edges=863640\nrun=/tmp/UnifiedSatNet_finish_n338foil/hsn-home/runs/run_000001 SOURCE_VERIFIED\n{\"censored_payload_bytes\":0,\"completed_traceroutes\":629,\"delivered_payload_bytes\":9.85e+08,\"dst\":50,\"end_ns\":1767312000000000000,\"format\":\"unified-network-simulation-1\",\"goodput_bps\":91203.70370370371,\"model\":\"single-flow-fluid-v1\",\"offered_payload_bytes\":1.08e+10,\"offered_rate_bps\":1000000,\"reached_traceroutes\":470,\"src\":49,\"start_ns\":1767225600000000000,\"unserved_payload_bytes\":9.815e+09,\"virtual_duration_ns\":86400000000000}\n",
+    "stderr": ""
+   }
+  },
+  {
+   "test": "24h-output-integrity-statistics-traceroute",
+   "status": "PASS",
+   "seconds": 0.0,
+   "detail": {
+    "statistics_rows": 86400,
+    "delivered_bytes_sum": 985000000.0,
+    "complete_traces": 629,
+    "censored_traces": 1,
+    "output_sha256": "ALL_MATCH",
+    "part_files": 0
+   }
+  }
+ ],
+ "platform": "Linux-6.1.155+-x86_64-with-glibc2.43",
+ "input_txt_sha256": "2866e3c92d21f4721494e4d7fe8a1f27b29f98ca1e6aa885554cfaadb71c1757",
+ "input_zip_sha256": "c73632f74b072709540fbe865386b02657c5cdebf957718c5023f999ad969203",
+ "build_method": "serial GCC fallback (CMake unavailable, not tested)",
+ "compiler": "g++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
+ "24h_summary": {
+  "censored_payload_bytes": 0,
+  "completed_traceroutes": 629,
+  "delivered_payload_bytes": 985000000.0,
+  "dst": 50,
+  "end_ns": 1767312000000000000,
+  "format": "unified-network-simulation-1",
+  "goodput_bps": 91203.70370370371,
+  "model": "single-flow-fluid-v1",
+  "offered_payload_bytes": 10800000000.0,
+  "offered_rate_bps": 1000000,
+  "reached_traceroutes": 470,
+  "src": 49,
+  "start_ns": 1767225600000000000,
+  "unserved_payload_bytes": 9815000000.0,
+  "virtual_duration_ns": 86400000000000
+ },
+ "24h_checks": {
+  "statistics_rows": 86400,
+  "delivered_bytes_sum": 985000000.0,
+  "complete_traces": 629,
+  "censored_traces": 1,
+  "output_sha256": "ALL_MATCH",
+  "part_files": 0
+ },
+ "not_tested": [
+  "ASan/UBSan intentionally not executed",
+  "other operating systems",
+  "full normative v3.4/v2.3 acceptance"
+ ],
+ "elapsed_seconds": 141.335,
+ "checks": 35
+}

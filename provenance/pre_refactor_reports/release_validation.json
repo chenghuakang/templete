@@ -1,0 +1,18 @@
+{
+  "date": "2026-10-13",
+  "platform": "Linux/GCC, euid 0",
+  "build": "GCC direct (CMake not available)",
+  "tests": {
+    "upstream_regression (+3 state-file cases)": "PASS",
+    "traceroute_unit": "PASS",
+    "hypersim --selftest": "PASS",
+    "unified_integration (24 checks)": "PASS",
+    "default_flow_clean_env (no HOME/SATPRED_HOME, 24h)": "PASS"
+  },
+  "default_result_equals_previous_release": true,
+  "not_verified": [
+    "CMake/CTest",
+    "Windows/MSVC",
+    "non-root permission failures"
+  ]
+}

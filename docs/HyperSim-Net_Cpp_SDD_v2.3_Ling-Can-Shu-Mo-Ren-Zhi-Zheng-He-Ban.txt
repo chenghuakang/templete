@@ -1,0 +1,1296 @@
+﻿================================================================================
+HyperSim-Net 超实时卫星网络仿真加速引擎
+C++软件实现文档：输入对齐、虚拟时间隔离、主循环与零参数默认值完整整合版
+================================================================================
+编号：HSN-SDD-005
+版本：2.3.0
+日期：2026-10-13
+状态：设计评审稿；本文不表示程序已实现或验收已通过。
+编码：UTF-8 BOM；交付格式：完整TXT
+依据：HyperSim-Net SRS v1.1.0；SATPRED-SATNET-SELF-CONTAINED v3.2。
+效力：本文替代此前HyperSim实现设计版本。上游磁盘协议以规范性附录为准；
+HyperSim内部结构和模型配置不能改变上游字段布局或伪装上游已有功能。
+代码块为接口及算法设计，不是可独立编译的完整源代码交付。
+
+目录
+01 系统目标、范围与工程
+02 输入格式与磁盘数据结构
+03 metadata、manifest、节点与多包
+04 SATC轨道与状态
+05 载入、完整性、错误与内存
+06 时间语义与时钟接口
+07 主循环完整逻辑
+08 事件调度、双缓冲与运行结构
+09 Python前端与协程
+10 网络工具与协议模型
+11 CUDA与时间并行
+12 测试数据与测试用例
+13 验收、计量、交付与追溯
+14 零参数运行与全部默认值（本版新增）
+附录A SATNET字节规范、源绑定与正式清单原文
+附录B SATC字节规范原文
+附录C run_id、配置、仿真适配与读取验收原文
+
+01. 系统目标、范围与工程
+--------------------------------------------------------------------------------
+1.1 使用带时间戳的卫星网络数据运行模拟程序。业务内部时钟和输出时间位于输入UTC
+时间轴，真实计算/I/O耗时只影响完成速度，不影响业务时间、事件、拓扑或协议状态。
+加速不是删除sleep或只改日志日期；必须保留虚拟等待期间发生的网络/任务事件。
+除网络信息输入外，所有参数均有本文第14章规定的默认值，支持零参数运行。
+1.2 主体C++20，Python3.10+离线AST编译前端，CUDA为可选。上游C++17程序无需升级。
+CMake作为HyperSim构建入口；上游自身按其统一build.py构建，不另造不一致实现。
+Linux/Windows均支持只读映射。禁fast-math，跨后端确定性必须实际验证。
+1.3 目录
+include/hsn/{core,graph,vtime,coro,netstack,gpu}；include/hsn/core/defaults.hpp
+src/{graph,vtime,netstack,gpu}；frontend/pyhsn；tools/{hsn-verify,hsn-bench}
+tests/{unit,integration,format,time,zero_arg,determinism,equivalence,perf,data,golden}
+1.4 模块：输入验证/映射 -> 图与源轨道视图 -> 虚拟调度 -> 网络模型/脚本任务 -> 输出。
+调度主线程唯一提交SimClock和跨分区状态；工作线程只计算独立任务，结果有序提交。
+GPU同步和输出线程不写SimClock，buffer完成消费前不复用。
+1.5 受支持语法/模型有明确边界。不透明任意Python扩展、子进程、真实网络服务不能
+自动拥有虚拟时钟；必须适配或拒绝。设计指标不是已测事实，不输出虚假PASS。
+上游工程容量/近似地固不认证为实测吞吐/严格ITRS或H精度。
+
+02. 输入格式与磁盘数据结构
+--------------------------------------------------------------------------------
+2.1 输入：SATNET graphs/*.ngb；manifest.json；绑定源SATC .sbin；可选Python脚本。
+nodes.bin是上游内部文件，禁止作为公共交换必需文件。CSV/links JSON是派生接口。
+新SATNET major1/minor1；旧minor0仅显式legacy；未知major拒绝。
+SATC基线SAMPLES major3/minor0、F64、ECEF、posvel；未来产品未实现须明确拒绝。
+未知minor仅在固定布局及必需语义仍兼容时读，不能盲目接受新语义。
+2.2 废弃旧HSNG：64B自定义头、NodeMeta二进制表、16B Epoch索引、24B LinkSnapshot、
+自定义EpochBlockHeader、BIDIR/loss/FIB/经纬度块均不再作为上游输入。
+替换为256B SATNET头、JSON节点、32B时间索引、32B有向边、32B尾、CRC32C。
+2.3 排列：头 -> JSON -> 64B对齐索引 -> 4096B对齐边区 -> 尾；padding全0。
+多字节小端、f64 binary64。以下packed定义只用于布局断言，不用于直接mmap解引用。
+
+#pragma pack(push,1)
+struct SatnetHeaderDisk {
+ char magic[8];                           // 0 SATNET1\0
+ uint16_t version_major,version_minor;    // 8,10
+ uint32_t header_size,flags,node_count,M,edge_size; // 12,16,20,24,28
+ uint64_t metadata_offset,metadata_size;  // 32,40
+ uint64_t time_index_offset,payload_offset; // 48,56
+ int64_t t0_ns,step_ns;                   // 64,72
+ uint64_t global_index0,total_edges,file_size; // 80,88,96
+ uint8_t source_orbit_sha256[32];         // 104
+ uint8_t reserved[116];                   // 136
+ uint32_t header_crc32c;                  // 252
+};
+struct SatnetTimeIndexDisk {
+ int64_t timestamp_ns;                    // 0
+ uint64_t edge_offset,edge_count;         // 8,16
+ uint32_t edge_crc32c,reserved;            // 24,28
+};
+struct SatnetEdgeDisk {
+ uint32_t src,dst,delay_us;                // 0,4,8
+ uint64_t bandwidth_bps;                  // 12，非8B自然对齐
+ double distance_m;                      // 20，非8B自然对齐
+ uint32_t kind;                          // 28
+};
+struct SatnetFooterDisk {
+ char magic[8];                           // NETEND1\0
+ uint32_t time_index_crc32c,metadata_crc32c;
+ uint64_t file_size,payload_bytes;
+};
+#pragma pack(pop)
+static_assert(sizeof(SatnetHeaderDisk)==256);
+static_assert(sizeof(SatnetTimeIndexDisk)==32);
+static_assert(sizeof(SatnetEdgeDisk)==32);
+static_assert(sizeof(SatnetFooterDisk)==32);
+static_assert(offsetof(SatnetEdgeDisk,bandwidth_bps)==12);
+static_assert(offsetof(SatnetEdgeDisk,distance_m)==20);
+static_assert(offsetof(SatnetHeaderDisk,header_crc32c)==252);
+
+2.4 域与语义
+node_count u32：等于nodes数组及manifest total，不包含SATC padding列。
+M>=1、等于源；timestamp=t0+j*step，step正且基线>=1ms。
+UTC输入按上游1970..2261/实际int64域，整数乘加先溢出检查。
+edge_count/total_edges u64；零边合法，不能缩窄为u32；简单图上界N*(N-1)先checked_mul。
+src/dst：[0,N)，不同；片内(src,dst)严格升序，无重复方向边。
+bw=1..UINT64_MAX；metadata radio允许0，不输出0容量边。
+delay_us u32；正distance/非负processing基线输出>=1；转ns必须u64*1000。
+distance finite且>0，无人为通用5000km上限；kind0卫星双端，kind1一卫星一地面。
+地面-地面非基线。单向和不对称方向容量合法，不强制反向一致。
+flags只bit0有效，1表示未提供source SHA且头hash全0；新基线须0并真绑定。
+其他reserved、padding必须0；空载荷CRC0。
+2.5 安全访问
+只读std::byte视图，ReadLE通过memcpy标量+端序转换；double通过uint64 bit_cast。
+禁止reinterpret_cast自然布局Edge；packed不能独自解决端序/对象生存期。
+断言CHAR_BIT8、double8/IEC559。视图不拥有，MappedFile存活覆盖所有消费。
+零拷贝不全量复制文件，允许有界CSR和GPU转换、标量加载。
+
+class EdgeView {
+ const std::byte* p_;
+public:
+ uint32_t Src() const; uint32_t Dst() const; uint32_t DelayUs() const;
+ uint64_t BandwidthBps() const; double DistanceM() const; uint32_t Kind() const;
+};
+
+03. metadata、manifest、节点与多包
+--------------------------------------------------------------------------------
+3.1 JSON UTF-8无BOM，拒绝重复键、NaN/Inf、无效UTF8、缺必需字段。
+u64直接整型解析，不能先double，保留2^53+1/UINT64_MAX。
+metadata语义包含nodes、两个XML SHA、source_hash_available/source_orbit_sha256、
+software_version/actual_backend/run_id/source_accuracy_class/source_frame_method、
+effective_policy/models/assumptions。字段要求以附录契约为准。
+摘要64小写hex，与头32原始字节同值；未知JSON键跳过但保留原数据。
+未知模型版本允许结构诊断，不宣称模型重算通过，不静默默认替代。
+3.2 nodes按graph id数组，id=下标；kind0卫星/1user/2ground_station。
+节点name/uplink/downlink/antennas；卫星gid/layer/plane/slot/P/S；地面xyz/up3*f64。
+前N真实卫星列与SATC i对应，gid可非连续；地面后接XML顺序。
+卫星metadata xyz/up零值可能占位，真实位置用对应SATC片，不拿0坐标算距离。
+IP不在上游，Facade需独立可复现映射表/冲突检查/模型记录。
+struct NodeInfo {
+ uint32_t graph_id,kind,gid,antennas;
+ uint64_t uplink_bps,downlink_bps;
+ uint32_t layer,plane,slot,P,S,name_offset,name_length;
+ double xyz_m[3],up[3];
+ bool has_gid,has_ground_position;
+};
+地面has_gid=false，不能伪gid0。ground xyz finite，up单位性按上游容差校验。
+3.3 正式manifest SATNET-1.1含status/software/run/inputs/nodes/products/warnings。
+products至少source_file/source_sha/graph_file/graph_sha/M/t0/k0/directed_edges。
+路径相对清单，拒绝默认逃逸；.part不可成功读。完整SHA实际重算。
+上游run_id原样引用；另生成simulation_run_id，不能覆盖伪造上游来源。
+3.4 多包按k0排序，重复/缺口/重叠/stem冲突拒绝；图源同stem一包一图不重分包。
+M/t0/step/k0及每片时间完全相同；Catalog一致但每包status0可变。
+有效[start,end)，尾片截end；范围外OutOfTimeRange不钳制或重复末片。
+连续游标O(1)；随机建立global_index->包/片表或O(log P)包二分，不虚称无索引O(1)。
+struct SliceLocation { uint32_t package,local; uint64_t global; };
+struct PackageRef { uint64_t global_index0; uint32_t M; int64_t t0_ns,step_ns;
+                    uint32_t graph_mapping,orbit_mapping; };
+
+04. SATC轨道与状态
+--------------------------------------------------------------------------------
+4.1 完整字典附录B：512B头、32B目录、普通段64B/张量4096B对齐、SEND32B尾。
+必需SAT_TABLE/NAME_TABLE/TIME_INDEX/DATA_TENSOR，status events可选。
+SAMPLES/ECEF/F64/C6/mask63基线；合法未实现产品返回Unsupported不冒充坏文件。
+Q32/CHEB/INITIAL/CHECKPOINT扩展未实现不得用f32或改名伪装。
+4.2 SAT_TABLE依序gid u32[Ns]、layer/plane/slot u16[Ns]、status0/flags u8[Ns]，列64对齐。
+NAME_TABLE24*Ns，UTF8完整码点截断，满长无NUL合法。
+TIME_INDEX i64 t[M]后64对齐u32 slice_crc[M]；Ns=roundup(N,64)。
+张量[M][C][Ns]；plane=Ns*8；slice=C*plane；off=tensor+j*slice+c*plane+i*8。
+648/Ns704：plane5632、slice33792；加2地面graph650，不是706。
+所有offset/size预检；未知段跳过解释也做边界/重叠/对齐检查。
+4.3 STATUS_EVENTS头8B count/reserved，每项24B：sat_index u32/status u8/3B0/from,to i64。
+sat_index为列非gid，按(sat_index,from)有序不重叠，[from,to)覆盖本包基线。
+padding/缺失F64 quietNaN 7FF8000000000000；padding gidFFFFFFFF其余表列0。
+DAMAGED有名义位置正常，消费端不改变生成policy；未连接不等同MISSING。
+部分NaN/Inf/无解释NaN拒绝；整条NaN有上游失败manifest解释可invalid并记录。
+STATE3.1真实CRC不能按旧3.0忽略。无完整来源不承诺精度。
+4.4 graph-only只GRAPH_INTEGRITY_OK；strict默认SOURCE_VERIFIED，要求整个源SHA、
+源内部CRC/ECEF/M/t0/step/k0/每片timestamp/gid匹配。同名同时间不证明绑定。
+legacy UNBOUND/INCOMPLETE_METADATA不能补默认hash假升级。
+
+05. 载入、完整性、错误与内存
+--------------------------------------------------------------------------------
+5.1 顺序：schema/资源预检 -> 稳定快照 -> mmap -> 固定头及CRC -> 区间 ->
+metadataCRC/schema -> indexCRC/时间/连续边 -> footer/总数 -> 片CRC/语义 ->
+图完整SHA -> 源完整SHA/SATC -> 当前/下一片CSR与预分配 -> 可运行。
+MAP_READY仅映射，GRAPH_VERIFIED图完整，SOURCE_VERIFIED含源。
+完整CRC/SHA需读取数据，不将50ms mmap声称10GB完整加载验证。
+源处理期间变化报错或用受控不可变快照；mtime/size不足以抗恶意修改。
+5.2 区间：metadata=[256,256+size)；index=[off,off+M*32)；payload=[off,off+total*32)。
+footer位于物理末32B，payload恰接footer；不重叠、对齐间隙全0。
+首片offset=payload，后片=前片offset+count*32；零边offset可相同。
+checked_add用a>MAX-b，checked_mul用b!=0&&a>MAX/b，先检再算。
+5.3 CRC32C reflected82F63B78/initFFFFFFFF/final取反；123456789 E3069283，空0。
+增量seed上一最终返回值。header[0,252)，metadata原JSON，index M*32，片count*32。
+SHA256整个实际文件（头/padding/尾），非XML/张量CRC替代。
+5.4 Error：统一上游code/where/message/line/col与包/片/offset/detail。
+生产Ok0 Arg1 Config2 Io3 Propagation4 Internal5 Device6 Integrity7。
+内部detail：BadMagic/Version/Overflow/Overlap/Crc/Hash/Source/Metadata/Time/Pool等。
+测试PASS0 FAIL1 INPUT2 GPU-SKIP3独立，不混用；错误不abort、不发布成功。
+5.5 预算：mmap虚拟空间/RSS/pinned/device分开；不全read_bytes、全片CSR/FIB缓存。
+缺省主机预算268435456B（见14.2），按N/L/流/池严格预检，不万能承诺。
+初始化有界分配，主推进无new/malloc及协程/JSON/sort隐式申请；不足明确错误。
+输入、名字、输出arena、当前/下一CSR和所有池计入预算，不能静默超限。
+
+06. 时间语义与时钟接口
+--------------------------------------------------------------------------------
+6.1 三时钟：数据UTC timestamp、业务SimClock、主机HostPerfClock。
+sim_utc=origin_utc+virtual_elapsed；origin默认输入run_start或显式覆盖内起点。
+实际耗时不在公式里；不以host_elapsed*加速倍数推进仿真。
+TIME001 以输入UTC POSIX ns时间轴作为业务来源，不取主机当前日期。
+TIME002 Sim与Host强类型隔离，Host只性能/资源/诊断/看门狗，不进业务状态/随机/日志。
+TIME003 time.time/ns返回模拟UTC；monotonic/ns返回虚拟相对；业务perf_counter虚拟。
+  整数ns权威，浮点UTC秒兼容但不保证纳秒精度。
+TIME004 sleep/timer/timeout虚拟调度，保留同步阻塞/async yield差别，不host sleep等长等待。
+TIME005 timestamp切片，sample-and-hold，新发包先见新拓扑，主机I/O/GPU快慢不影响。
+TIME006 输出捕获事件发生时的模拟时刻，不在刷盘时换时间戳。
+TIME007 默认尽快推进无物理节拍，不删除等待或按host乘倍速假模拟。
+TIME008 起止在完整覆盖内，超出拒绝/显式提前结束，不隐式沿用末片。
+TIME009 未适配第三方进程/扩展/真实服务拒绝，不能宣称任意程序透明时间虚拟化。
+TIME010 host watchdog触发为aborted/failed，非某连接业务timeout。
+TIME011 同输入/config/seed，主机负载/人为I/O/写盘延迟不改变规范业务结果。
+6.2 类型与接口
+using UtcNs=int64_t; using RelativeNs=uint64_t;
+struct HostCounter { uint64_t value; }; // 不可隐式转业务时间
+struct SimulationWindow { UtcNs origin_utc_ns,end_utc_ns; };
+class SimClock {
+ UtcNs origin_; RelativeNs now_; // 仅调度主线程写
+public:
+ UtcNs NowUtcNs() const; RelativeNs NowMonotonicNs() const;
+ double NowUnixSeconds() const; double NowMonotonicSeconds() const;
+ Status AdvanceTo(RelativeNs target); // 不回退/不越覆盖/checked_add
+};
+class HostPerfClock { public: static HostCounter Now(); }; // steady计数
+start<=origin<end<=source.end，差值先检；恢复mono为原虚拟经过时间，不重置deadline。
+中间起点默认新建业务；历史TCP/队列须checkpoint或前跑，不能只改origin冒充恢复。
+6.3 00/10/20秒数据允许3.25秒事件，使用片0，日志3.25秒，不吸附采样时间。
+中间坐标若需要，显式位置hold/已实现插值模型；不宣称粗采样提供精确中间真实位置。
+sleep60登记+60s并处理期间事件；sleep0必须yield；普通业务算术不因host慢增加虚拟时间。
+模拟CPU延迟需显式compute事件；两个并发sleep10/20，无其他依赖总virtual20非30。
+6.4 业务记录：sim_timestamp_ns/elapsed/event_id/type/node/flow/topology_index/payload。
+ISO9位由整数ns格式化；日志线程只消费捕获时间；统计rate分母virtual秒。
+独立performance报告放host/CPU/GPU/I/O；不入业务SHA、不入确定性业务run_id。
+建议stdout业务，stderr或独立报告主机诊断；发布时点晚不改变业务发生时间。
+
+07. 主循环完整逻辑
+--------------------------------------------------------------------------------
+7.1 不变量
+I01 只有调度主线程提交SimClock，所有业务读它。
+I02 输入准备/CPU/GPU/刷盘实际等待不推进业务时间。
+I03 不提前执行未来事件/发布未来业务结果，不回退时间修补漏事件。
+I04 推进前当前时刻稳定，所需输入完成准备，不能越过未处理因果边界。
+I05 业务输出在事件发生时捕获时间，与host输出时刻隔离。
+I06 无默认物理节拍sleep；时钟推进由模型/事件决定不是计算速度。
+I07 缺数据/设备错/取消不能造拓扑或伪业务timeout继续成功。
+
+7.2 边界及上下文
+struct Boundary {
+ RelativeNs elapsed_ns;
+ bool topology_change,discrete_events,service_completion,observation,run_end;
+};
+struct EventContext {
+ UtcNs sim_timestamp_ns; RelativeNs sim_elapsed_ns;
+ uint64_t topology_global_index,event_id;
+};
+enum class EventPhase:uint8_t {
+ StateTransition=0,Completion=1,Timeout=2,TaskResume=3,Observation=4
+};
+enum class RunStatus:uint8_t { Ready,Running,Completed,Aborted,Failed };
+struct RunControl {
+ RunStatus status; uint64_t max_same_time_microsteps; bool stop_requested;
+};
+boundary多个标志可同时为真；elapsed0..duration单调；microstep上限配置正整数。
+拓扑/global_index合法；UTC=origin+elapsed预检；host强类型不混入。
+
+7.3 执行阶段
+准备输入 -> 在旧区间有效状态下演进[current,next) -> 等必要后端完成 -> 提交SimClock ->
+应用该时刻拓扑/状态 -> 完成/超时/任务事件 -> 同刻事件闭包 -> 观测/业务输出 -> 下一边界。
+默认同刻：切换先，已排完成/ACK次，timeout再次，任务恢复再后，观测最后。
+ACK恰deadline先到达，timeout处理前重新检查是否仍有效。
+拓扑切换同刻在途包到达按已声明在途模型处理，不因边消失无条件drop。
+默认edge-down-policy-v1：尚未序列化的队列包drop，未完成发送drop，已完成发送且在传播
+的包按已排到达事件交付；重新选路的新包用新图。策略改变必须模型版本化。
+规则不得依赖线程/GPU stream完成先后。
+
+7.4 完整主循环（接口级伪代码）
+Status Engine::Run() {
+ control_.status=RunStatus::Running;
+ const HostCounter host_begin=HostPerfClock::Now();
+ Status st=InitializeAtOrigin();
+ if (!st.ok()) return FailRun(st,host_begin);
+ st=ProcessCurrentTimestamp();                 // 起点事件不可略过
+ if (!st.ok()) return FailRun(st,host_begin);
+ while (clock_.NowMonotonicNs()<duration_ns_) {
+   if (HostCancellationRequested()) return AbortRun(host_begin);
+   RelativeNs current=clock_.NowMonotonicNs();
+   Boundary next{};
+   st=DetermineNextBoundary(current,next);
+   if (!st.ok()) return FailRun(st,host_begin);
+   if (next.elapsed_ns<=current || next.elapsed_ns>duration_ns_)
+     return FailRun(Status::InvalidTimeBoundary(),host_begin);
+   st=PrepareInputForBoundary(next);           // host读盘等待不改clock
+   if (!st.ok()) return FailRun(st,host_begin);
+   st=AdvanceIntervalState(current,next.elapsed_ns); // 旧片区间演进
+   if (!st.ok()) return FailRun(st,host_begin);
+   st=AwaitRequiredBackendCompletion();        // host同步不改clock
+   if (!st.ok()) return FailRun(st,host_begin);
+   st=clock_.AdvanceTo(next.elapsed_ns);        // 完成后唯一有序提交
+   if (!st.ok()) return FailRun(st,host_begin);
+   if (next.run_end) {
+     st=FinalizeAtRunEnd();                    // 无终点新业务
+     if (!st.ok()) return FailRun(st,host_begin);
+     break;
+   }
+   st=ProcessCurrentTimestamp();
+   if (!st.ok()) return FailRun(st,host_begin);
+ }
+ st=FlushBusinessOutput();
+ if (!st.ok()) return FailRun(st,host_begin);
+ st=PublishSuccessfulRunManifest();           // 发布失败仍Failed
+ if (!st.ok()) return FailRun(st,host_begin);
+ control_.status=RunStatus::Completed;
+ WritePerformanceReport(host_begin,HostPerfClock::Now());
+ return Status::Ok();
+}
+业务结果成功发布后性能报告失败记录诊断，不改已发布业务内容；若性能报告为必需产物，
+则必须在成功manifest之前完成。发布策略在配置中冻结。
+FinalizeAtRunEnd结算截至end的累计量，不启动end新任务；事件/包精确发生于end不属于
+[start,end)业务集。已完成区间工作可以结算，剩余事件/包以censored/terminated另记。
+
+7.5 起点
+Status Engine::InitializeAtOrigin() {
+ RETURN_IF_ERROR(graph_.ActivateAtUtc(window_.origin_utc_ns));
+ RETURN_IF_ERROR(InitializeSimulationStateAtOrigin());
+ RETURN_IF_ERROR(ScheduleInitialTasksAndObservations());
+ return Status::Ok();
+}
+前置条件源已验证/覆盖完整/资源已预分配。恢复checkpoint需验证时间/输入/配置一致。
+
+7.6 同刻闭包
+Status Engine::ProcessCurrentTimestamp() {
+ RelativeNs now=clock_.NowMonotonicNs();
+ UtcNs utc=clock_.NowUtcNs();
+ RETURN_IF_ERROR(graph_.ApplyTransitionsAt(utc));
+ RETURN_IF_ERROR(ApplyNodeStateTransitionsAt(utc));
+ uint64_t microsteps=0;
+ while (scheduler_.HasExecutableEventAt(now)) {
+   if (++microsteps>control_.max_same_time_microsteps)
+     return Status::ZeroTimeLivelock();
+   Event ev{};
+   RETURN_IF_ERROR(scheduler_.PopNextOrderedEventAt(now,ev));
+   EventContext ctx{utc,now,graph_.CurrentGlobalIndex(),ev.logical_id};
+   RETURN_IF_ERROR(DispatchAndCommit(ev,ctx));
+   RETURN_IF_ERROR(scheduler_.ValidateNewEventTimes(now));
+ }
+ RETURN_IF_ERROR(EmitScheduledObservationsAt(now));
+ return Status::Ok();
+}
+Pop按phase/完整ID，不仅hash。禁止新事件早于now；同刻因果子事件采用有界microstep。
+已经完成的phase不能由新事件倒插重执行；零延迟ACK等子事件在下一microstep处理，
+完整排序键(timestamp,microstep,phase,hash,logical_id)，因果父先于子。
+观测默认只读，不生成新的业务事件；如回调可发包则归TaskResume，闭包稳定后再观测。
+CPU并行任务结果按逻辑key提交，不能按真实finish顺序。
+
+7.7 选择下一边界
+Status Engine::DetermineNextBoundary(RelativeNs current,Boundary& out) {
+ RelativeNs t=duration_ns_;
+ MinAssign(t,scheduler_.NextEventTime());
+ MinAssign(t,graph_.NextTransitionElapsedNs());
+ MinAssign(t,node_states_.NextTransitionElapsedNs());
+ MinAssign(t,network_.NextServiceCompletionNs());
+ MinAssign(t,observations_.NextObservationNs());
+ MinAssign(t,continuous_model_.NextBoundaryNs());
+ if (t<=current) return Status::UnprocessedCurrentTimeEvent();
+ out=DescribeBoundary(t); out.elapsed_ns=t; out.run_end=(t==duration_ns_);
+ return Status::Ok();
+}
+无下一事件用optional而非非法时间哨兵参与unchecked运算。
+连续模型可能在内部生成更早事件时必须先求根/缩短候选next，提交前发现有效最早边界。
+不允许先推进10s再发现3s有timeout，回退修补。预计算可在scratch中做，提交前才改可见状态。
+AdvanceIntervalState只能产生next及之后的事件；若发现更早边界必须撤销scratch重规划，
+不能留下部分状态。流体积分可求解，逐包服务完成必须纳入边界。
+1ms仅分桶/宏观内部粒度，0.2/0.8ms事件精确处理。bitmap不是唯一空闲判据。
+
+7.8 例子与快进
+origin00s、topology10s、wake20s：处理00，演进00..10，提交10/切片，演进10..20，
+提交20/切片（若有）/唤醒。无需host等20s；读盘实际300ms不把wake改为20.300s。
+存在传输/队列/积分时按模型演进；无变化可直达边界，不逐mshost睡眠。
+下一输入包未准备好可实际等待，业务clock停在current，不能改用最后图猜补。
+
+08. 事件调度、双缓冲与运行结构
+--------------------------------------------------------------------------------
+8.1 5层256槽，L0 1ms，各层256倍；最高覆盖约34.8年。保留expire ns，超范围预分配
+overflow或TimerTooFar。插入/级联均摊，不把k个触发总工作称O(1)。
+FF跨层必须正确提取/级联到期，不只是cursor取模；bitmap辅助不漏拓扑/统计/服务。
+struct alignas(64) TimerEvent {
+ uint64_t expire_ns,logical_seq,hash_key;
+ uint32_t node_id,task_id,next,prev,payload_idx;
+ uint16_t slot; uint8_t type,level;
+ uint64_t logical_parent; uint8_t padding[8];
+};
+static_assert(sizeof(TimerEvent)==64);
+逻辑seq来自task/父事件/局部计数，不来自并行atomic争抢顺序；hash碰撞完整ID兜底。
+随机key=seed+稳定流/包/探针标识，非stream/tps编号重种子。
+8.2 运行图
+struct SliceView { uint64_t global_index; uint32_t package,local; UtcNs valid_from,valid_to;
+ const std::byte* edge_bytes; uint64_t edge_count; };
+struct CsrView { const uint64_t* row_offsets; const std::byte* edge_bytes;
+ uint32_t node_count; uint64_t edge_count; };
+已有边升序，row_offsets N+1按src构建，GetLink row内dst二分。index用u64防大边数截断。
+struct LinkProperties { uint32_t src,dst,kind; uint64_t delay_ns,capacity_bps; double distance_m; };
+delay=uint64(delay_us)*1000；已含processing不双加。stable_link_id=(u64(src)<<32)|dst。
+LinkRuntimeSoA：u64 queue_bytes/next_service_ns/transmitted_bytes/dropped_packets/stable_id；
+数组基址64B，跨片状态端点匹配不按边index；旧边断开按声明policy处理。
+8.3 双缓冲macro步读T-1写T，未修改字段也必须继承，swap仅在提交点。
+微观同桶事件用工作状态顺序提交，ACK/出队可见前事件，不能强加虚假1ms延迟。
+8.4 Pool<T>：初始化aligned slab，Acquire/Release固定索引，线程策略明确；ABA tag需
+足宽实际原子head。Event/Packet/Flow/Probe/Frame容量按14.2默认与预算冻结，耗尽明确错误/背压。
+Packet：flow/size/seq/sent_ns/current_link/hop/kind/flags/next；热结构align64，sizeof实测断言。
+Flow：src/dst、32跳path、cwnd/ssthresh/inflight、srtt/rttvar/rto、seq/acked、TCP状态/interval。
+不硬写成员合计无法满足的192B尺寸；结构sizeof/offsetof由构建固定测试。
+HopSnapshot保持SRS node/ip/float rtt[3]，内部整数RTT和ProbeStatus；float仅表现转换。
+TraceRouteResult hop0..32/reached/reason/src/dst/issued_time；超跳明确失败。
+BandwidthResult rate/goodput/RTT/loss/bytes/retransmit/bottleneck/model/version。
+
+09. Python前端与协程
+--------------------------------------------------------------------------------
+支持有界if/for/while、async def/await、sleep/gather/create_task/wait_for、注册网络工具。
+动态eval/反射/未知awaitable/任意shell拒绝并报行列；未知时间函数不得泄露host时钟。
+int64策略溢出报错，不能冒充Python大整数；list固定容量、dict静态键，初始化预分配。
+TaskFrame含task/state/parent/pending_children/wake_event/status和编译确定locals区。
+协程operator new从FrameArena，生命周期明确；显式switch状态机亦可。
+asyncio.sleep0让出；sync time.sleep阻塞脚本域用户代码，网络内核仍推进，保持可支持语义。
+AST subprocess+regex只有副作用/捕获语义可证才内联，fallback冻结文本解析；记录诊断。
+外部工具/进程只能注册虚拟Facade/adapter，不能未经适配真实执行后声称虚拟时间。
+未提供脚本时使用内置builtin:default_probe（第14.4节），其全部参数来自EffectiveConfig。
+
+10. 网络工具与协议模型
+--------------------------------------------------------------------------------
+10.1 上游无FIB，当前有向CSR求路由，整数delay权重checked加法，tie冻结节点id升序。
+cache key=片+route policy，按活跃源优先，FIB最大规模预算预检。
+Traceroute正向逐跳和返回路分别计算，反向不可达timeout，不2*正向伪RTT。
+loss默认ideal-loss-v1（loss_rate=0）、jitter默认none；启用扩展记录版本/参数/seed，不塞边reserved。
+loss=0仅指信道随机误包为0；拥塞、队列满、断链造成的丢包仍会发生并被统计。
+loop/不可达/33跳明确状态；单probe状态独立；IP使用synthetic-v1映射。
+CLI真实兼容锁具体traceroute版本/选项及golden，不假定所有Linux唯一文本。
+10.2 Fluid（默认）：方向链路Max-Min渐进填充，流集合/片变化重算，积分rate*dt。
+Packet：MTU1500/UDP payload1200/DropTail100包缺省；TCP算法cubic/MSS1448/RTO锁定。
+40Mbps/1500B=3333.333包/s，保留服务余量，不每ms强制3/4包。
+cap不是goodput，不另按uplink强加上游未声明节点共享瓶颈。
+10.3 iperf -t/-i/-b/-J，初始化容量/preallocated JSON树；start/intervals/end按冻结target
+版本golden，TCP/UDP字段区别，不宣称无版本普适官方Schema。
+interval末不足合法；bytes精确加总；吞吐分母virtual时间。
+上游satnet-links-1 rateMbps6位/delayms3位/loss0/位置经纬高是派生输出，精度损失记录；
+严格主计算用.ngb原值，不反向覆盖。
+
+11. CUDA与时间并行
+--------------------------------------------------------------------------------
+当前批32B非对齐边显式转换aligned SoA；mmap CPU不等于GPU零拷贝。
+CPU/GPU同整数路径/tie；distance uint64而非float路径权重；超范围显式分块/失败。
+N*N矩阵先预算，不全片缓存；小图可blocked APSP，大图活跃源SSSP。
+禁FMA/fastmath不足以证明跨设备libm位一致，严格模式用已验证确定性数学/整数随机。
+CUDA Graph1000步只依赖图稳定时启用，拓扑变化切批重录，实际完成时间不推进clock。
+copy/kernel所有错误检查，consumer完成前不复用pinned/device；explicit cuda失败，auto才回退。
+TPS-exact完整checkpoint队列/流/定时器/帧/随机计数/clock，边界相同才接受，否则串行重算。
+重叠warmup的小吞吐误差不证明exact；TPS-approx需显式标签/误差配置，不能通过位级验收。
+无跨片状态探针可独立并行，随机key不按slice重种子，事件仍全局仿真因果提交。
+默认backend=cpu、tps-mode=off（14.2），GPU/TPS均为显式启用功能。
+
+12. 测试数据与测试用例
+--------------------------------------------------------------------------------
+12.1 数据
+D1 合法minor1三卫星M2，起点2026-01-01 UTC/step10；真实格式SATC测试fixture。
+片0排序：0->1 delay1000us bw40M dist299792.458m kind0；1->0 delay1000 bw20M同dist；
+1->2 delay2000 bw10M dist599584.916m kind0。片1只0->1/1->0。
+源x=7000000/7299792.458/7899377.374,y=z0，速度测试0，明确非真实轨道模型。
+0->2片0正向3ms但无返回路，timeout；片1不可达。
+D2 单片/全包零边，CRC0/offset相同合法。
+D3 metadata/edge 2^53+1/UINT64_MAX容量；delay UINT32_MAX转4294967295000ns。
+D4 实际上游648/Ns704+2地面，125s/step10/package60：13片3包6/6/1。
+gid0missing、gid1damaged、gid36在20..40s missing且40恢复。
+D5 实际上游默认600s，60片10轨道/10图包，无需故障事件。
+D6 非连续gid2/7/19对应graph0/1/2，explicit空槽/exclude保号。
+D7 真合法10GiB图包或包组，manifest真SHA，不能改名稀疏文件充当输入。
+D8 40M/1500B/600s单流和100+节点3600s固定并发场景。
+D9 恶意变异；测深层语义需重算外层CRC，不只命中头CRC。
+D10 00/10/20拓扑，3.25/10/20事件，用于时间隔离。
+D11 无地面节点的合法SATNET（只有卫星），用于零参数默认流量为空场景。
+数据/脚本/golden/seed/生成器版本及SHA冻结，生产不默认简化测试轨道。
+
+12.2 格式及来源（ID：操作 -> 预期）
+FMT01 sizeof/offsetof及Python <IIIQdI/<qQQII/<8sIIQQ -> 所有字段逐值一致。
+FMT02 CRC标准/空/增量 -> E3069283/0/等于一次性。
+FMT03 magic/major/edge_size/截断 -> 明确拒绝无越界。
+FMT04 metadata/index/payload错位、重叠、size/count溢出 -> 读前拒绝。
+FMT05 头/metadata/index/边翻位 -> 对应CRC定位。
+FMT06 header/footer/物理长度矛盾 -> 拒绝，异常互相吻合不能绕过物理范围。
+FMT07 单向/不对称合法；自环/重复/乱序/越界/端点kind错 -> 拒绝。
+FMT08 bw0/distance0/NaN/Inf/kind未知/padding非0 -> 拒绝。
+FMT09 零边片 -> 保留全部timestamp、CRC0、payload0合法。
+FMT10 JSON重复键/错UTF8/缺字段 -> 拒绝；u64极值精确读回。
+SRC01 合法源 -> SOURCE_VERIFIED；同名改字节 -> HashMismatch。
+SRC02 头/metadata/flags hash矛盾 -> 拒绝；UNBOUND严格模拟拒绝。
+SRC03 源CRC/ECEF/M/t0/step/k0/timestamp/gid任一错 -> 拒绝无成功发布。
+SRC04 图自身通过无源 -> 仅GRAPH_INTEGRITY_OK；处理中修改源 -> 检测/快照隔离。
+PKG01 枚举打乱 -> 按k0正确6/6/1；重复/缺口/重叠/stem冲突 -> 拒绝。
+PKG02 start-1/end查询 -> 范围外；120..125尾片不延130。
+ORB01 648/704/5632/33792/650 -> 逐值匹配；padding非节点。
+ORB02 非连续gid映射；20/39.999999999/40状态 -> Missing/Missing/恢复。
+ORB03 跨包status0不同合法；metadata卫星0占位 -> 读SATC。
+ORB04 部分NaN/Inf/无解释NaN -> 拒绝；有解释完整失效 -> invalid。
+UNIT01 微秒转ns最大值正确、不双加processing；方向40M/20M独立。
+
+12.3 时间隔离专项
+TIME-T01 主机日期不同 -> 首time_ns等数据origin。
+TIME-T02 sleep10 -> virtual+10000000000ns，无host等长要求。
+TIME-T03 3.25s -> 输出3.25/use片0，不吸附timestamp。
+TIME-T04 10s边界 -> 新发包见新片。
+TIME-T05 并发sleep10/20 -> virtual20非30。
+TIME-T06 在输入/GPU/日志适配层注入真实延迟 -> 业务值/时间/SHA不变，host耗时增加。
+TIME-T07 旧事件20s后刷 -> 保留3.25捕获时间。
+TIME-T08 超覆盖 -> 拒绝/显式结束，不重复末片。
+TIME-T09 mono起点0、10s为10s，UTC为origin+10s。
+TIME-T10 业务perf_counter虚拟；HostPerfClock不可参与业务分支。
+TIME-T11 timeout5/sleep10 -> virtual5超时，不随计算耗时变。
+TIME-T12 host watchdog -> aborted/failed，非连接伪timeout。
+TIME-T13 主机时钟跳变/CPU负载 -> 业务一致。
+TIME-T14 0.2/0.8ms -> 精确ns先后。
+TIME-T15 sleep0 yield，microstep超限ZeroTimeLivelock，不host推进解死锁。
+TIME-T16 iperf吞吐分母virtual区间。
+TIME-T17 checkpoint恢复mono/UTC/deadline连续。
+TIME-T18 未适配扩展/子进程时间 -> 拒绝或注册适配。
+TIME-T19 中间位置 -> 明确hold/插值，不伪真实精度。
+TIME-T20 验证失败 -> 不进入业务运行、不发布成功。
+
+12.4 主循环专项
+LOOP-T01 起点事件 -> 首任务数据origin，初始观测不遗漏。
+LOOP-T02 推进 -> current稳定且输入准备/计算完成后提交，无跨因果边界。
+LOOP-T03 实际I/O延迟 -> clock停current，不影响业务结果。
+LOOP-T04 GPU延迟/乱完成 -> 主机finish不作业务timestamp，全序提交。
+LOOP-T05 同刻切片/发包 -> 切片先。
+LOOP-T06 ACK恰deadline -> 完成先，timeout检查已取消/满足，不误超时。
+LOOP-T07 同刻子事件链 -> 父子microstep稳定后观测，超限明确失败。
+LOOP-T08 日志异步延迟 -> 时间捕获保持。
+LOOP-T09 end边界 -> 无新业务；累计结算到end，精确end事件终止标记。
+LOOP-T10 host取消 -> 完成范围真实，中断不造成功。
+LOOP-T11 连续模型发现内部更早事件 -> scratch撤销缩next，无时间回退/部分提交。
+LOOP-T12 加速计量 -> 虚拟跨度/host耗时分开。
+LOOP-T13 观测回调 -> 只读或预归TaskResume，不输出半完成状态。
+LOOP-T14 发布失败 -> Failed，不先Completed或留下成功manifest。
+LOOP-T15 断边在途 -> 按冻结edge-down-policy，队列/未完服务/已在传播分别测试。
+
+12.5 其他模块
+VT01 1/4/32线程同输入5次 -> 完整逻辑排序/业务SHA相同，hash碰撞亦同。
+VT02 FF跨层/包/拓扑无漏；队列非空不能bitmap空就跳。
+VT03 双缓冲继承未修改，边重排队列不串链路。
+VT04 池耗尽明确；new/malloc/协程/JSON/sort拦截推进计数0。
+FE01 gather100/支持语法与冻结参考一致；未知语法报行列、无真实shell回退。
+FE02 regex内联/回退捕获一致；sync/async sleep差别正确。
+NET01 D1正向3ms但无返回timeout；loop/33hop/unreachable明确且无越界。
+NET02 固定CLI目标golden逐字节一致。
+NET03 3流共40M Fluid每13.333333Mbps，预冻结1%容差。
+NET04 packet1s完整3333*1500B，序列化余量保留。
+NET05 iperf -t5 -i1 -b10M -J，5intervals/bytes总/end正确，TCP/UDP golden分别。
+GPU01 explicit无设备Device，auto记录cpu，GPU测试SKIP。
+GPU02 graph vs launch业务结果时间相同；TPS-exact同串行或重算，approx标记不替代。
+EQ01 锁定ns-3同算法/MTU/初值，稳态吞吐/均延迟相对<=5%。
+EQ02 UDP LossModel至少30独立冻结seed、置信区间；单随机样本不证明等价。
+EQ03 对照0用预定绝对容差、分布距离另冻结，无有效样本不得PASS。
+DET01 严格CPU/GPU业务字节一致需实测；上游backend头差异不混同输入字节比较。
+
+12.6 性能与报告
+PERF01 单流600s执行>=500x；PERF02 100+节点3600s>=50x，配置/硬件冻结。
+PERF03 10GiB mmap ready<50ms单列，全部CRC/SHA/绑定另计不冒充同门限。
+PERF04 warm FIB8hop route-only p50<500ns，完整探针/返回路/文本另测。
+PERF05 空调度step<50ns，release固定频率批10^7，报告计时基线。
+PERF06 虚拟映射/RSS/pinned/device分别，无全运行长度增长缓存。
+预热后>=5重复median/min/max，冷热cache分开。报硬件/驱动/编译/模型/N/L/M/线程/输入SHA。
+每测试ID输入SHA/version/步骤/预期/实测/PASS FAIL SKIP NOT TESTED/报告SHA。
+fuzz>=10000固定seed样本，ASan/UBSan/TSan适用范围，有效/拒绝/崩溃分别。
+未测试均NOT TESTED，不由本文生成产生PASS。
+
+13. 验收、计量、交付与追溯
+--------------------------------------------------------------------------------
+AC01 输入字段/offset/Python交叉解码/全部CRC和单位严格对齐。
+AC02 strict均SOURCE_VERIFIED；错源/损坏/缺包不成功发布。
+AC03 真实上游D4/D5互操作，不能只自制fixture。
+AC04 TIME001..011落实，TIME-T及LOOP-T全部通过，时间隔离一票否决。
+AC05 同刻拓扑/状态/ACK/timeout/因果提交及断边策略通过。
+AC06 业务确定性通过；未实测GPU SKIP；TPS approx不作exact通过。
+AC07 主推进零分配、64B热结构对齐、预算/耗尽处理通过。
+AC08 恶意格式/溢出/范围fuzz安全通过，未知major明确拒绝。
+AC09 分层性能实测，不混mmap/源验证/执行，>=5重复报告。
+AC10 ns-3<=5%只对冻结已测模型场景，不推广任意真实网络。
+AC11 成功发布/取消/失败清理正确，无伪完整manifest。
+AC12 交付源码/CMake/工具/配置schema/输入SHA/golden/测试/性能报告/本TXT。
+AC13 零参数运行：ZERO-T01..14全部通过，14.2默认值表与程序导出逐项一致（强制）。
+AC14 默认值不得依赖未交付外部文件、网络资源或主机当前时间（强制）。
+协议/来源/安全/时间隔离/业务确定性/零分配/零参数默认值强制项不以偏差单当PASS。
+
+13.1 加速比
+T_sim=已完成虚拟终点-origin，不是最后一条日志减第一条日志；中断不计未完成时段。
+T_exec=Engine::Run实际耗时，包含执行中必需I/O/同步。
+T_e2e=规定任务启动到全部结果发布，包括规定范围的初始化/验证/输出。
+execution_speedup=T_sim/T_exec；end_to_end_speedup=T_sim/T_e2e。
+单列编译/映射/完整校验/初始化/执行/发布；阶段重叠不盲目求和当墙钟。
+host等待降低加速比但绝不能改变业务timestamp/timeout。
+
+13.2 输出清单
+simulation_run_id、上游run_id引用、输入manifest/图/源SHA、模型/时间语义virtual-utc-v1、
+origin/end/actual_completed_virtual_end、验证等级、seed、actual_backend、approximate、
+业务SHA、effective_config.json引用、独立performance引用、warnings/status。
+性能墙钟不放规范业务run_id；失败实际完成范围和错误位置记录，成功原子发布。
+
+13.3 追溯
+F1.1/1.2 -> 02..05/FMT/PERF03；F1.3 -> 03.4/07/PKG；F1.4 ->05/SRC/AC02。
+F2.1..3 ->09/FE/TIME003/009；F3.1..4 ->06..08/VT/TIME-T/LOOP-T。
+F4.1..3 ->10/NET/EQ；F5.1..3 ->11/GPU/DET。
+NF性能->PERF，确定性->DET，内存->VT04/AC07。
+用户时间要求->TIME001..011、TIME-T01..20、LOOP-T01..15、AC04、07章主循环。
+用户零参数要求->ZERO001..010、14.2默认值表、14.4内置脚本、ZERO-T01..14、AC13/AC14。
+
+13.4 已修订旧设计风险
+hash非唯一，禁FMA不独自证明跨GPU位一致；1ms轮保留ns；mmap不等于全量校验；
+单向图不能双向强验或2倍造RTT；预热小误差不等于exact；上游u64不任意缩窄；
+不能只改日志/删除sleep/按host乘倍速；host取消不能造业务timeout；
+不能漏起点/边界事件或在发布失败前宣告Completed；不能推进后回退补内部事件；
+默认值不得散落在代码各处，必须由单一注册表产生。
+
+14. 零参数运行与全部默认值（本版新增）
+--------------------------------------------------------------------------------
+14.1 需求条款
+ZERO001 唯一必需输入是网络信息：SATNET运行目录（含manifest.json与graphs/*.ngb），
+  或单个manifest.json路径，或单个.ngb文件。其余全部参数都有本章规定的默认值。
+ZERO002 命令 hypersim <network_input> 不交互、不下载、不安装依赖、不读取主机当前日期
+  作为业务时间、不要求任何环境变量，即可完成 验证->仿真->输出->发布。
+ZERO003 defaults.hpp 是唯一缺省来源；CLI --help、defaults.json导出、effective_config.json、
+  成功清单均由同一注册表生成。新参数未登记默认值/单位/合法域/生效阶段时构建测试失败。
+ZERO004 优先级：内置缺省 -> 配置文件(--config，可选) -> 环境变量HSN_*(可选) -> 显式CLI。
+  显式给出但非法的值拒绝，不回退缺省；未知参数/未知配置键拒绝。
+ZERO005 全部最终值及来源(default/file/env/cli)写入运行目录effective_config.json；
+  业务规范run_id包含有效配置的规范化内容，不包含主机路径与墙钟。
+ZERO006 默认值“computed”表示由算法从输入推导（如起止时间），不是填0；
+  “disabled”表示功能关闭且行为明确；默认值不能依赖未提供的外部文件。
+ZERO007 默认脚本：未提供Python脚本时运行内置builtin:default_probe（14.4），
+  它只使用输入中的节点，不假设IP、主机名或外部服务；无地面节点时流量为空并显式记录。
+ZERO008 自动发现：源轨道.sbin默认按manifest.products[].source_file相对清单目录定位；
+  单个.ngb输入时在同级orbits/或orbits/samples/按同stem查找；找不到源在strict下失败，
+  不静默降级为graph-only。
+ZERO009 输出：默认写入 <HSN_HOME>/runs/run_000001 起最小未用序号（原子mkdir）；
+  HSN_HOME默认用户主目录下 .hypersim；不覆盖已有目录；显式--output非空目录拒绝。
+ZERO010 退出码沿用生产ErrorCode；零参数成功运行返回0并生成成功清单。
+
+14.2 全部参数默认值表
+格式：参数 | 默认 | 单位/类型 | 合法域 | 阶段 | 说明
+--- 输入与输出 ---
+network_input             | (必需)              | 路径          | 存在且可读                 | 加载 | 目录/manifest/.ngb
+--script                  | builtin:default_probe | 路径或builtin: | 可读 或 已注册builtin     | 前端 | 不提供则内置脚本
+--source-mode             | strict              | enum          | strict/graph-only          | 加载 | graph-only仅诊断并记录降级
+--source-dir              | computed            | 路径          | 存在                       | 加载 | manifest.products.source_file
+--output                  | auto                | 路径          | auto 或 不存在/空目录      | 输出 | auto=HSN_HOME/runs/run_NNNNNN
+--hsn-home                | ~/.hypersim         | 路径          | 可创建                     | 输出 | 环境变量HSN_HOME可覆盖
+--legacy-minor0           | false               | bool          |                            | 加载 | true仅结构读取并标UNBOUND
+--verify-checksum         | true                | bool          |                            | 加载 | false仅诊断，清单标未校验
+--log-format              | jsonl               | enum          | jsonl/text                 | 输出 | 业务日志
+--log-level               | info                | enum          | error/warn/info/debug      | 输出 | 诊断日志，不影响业务
+--performance-report      | true                | bool          |                            | 输出 | 独立performance.json
+--effective-config        | true(常量)          | bool          | true                       | 输出 | 总是写出
+--- 时间 ---
+--start                   | computed            | UTC ISO/ns    | ∈输入覆盖范围              | 时间 | 默认=首片timestamp
+--end                     | computed            | UTC ISO/ns    | start<end<=覆盖终点        | 时间 | 默认=末片timestamp+step
+--duration                | computed            | s(十进制)     | >0                         | 时间 | 与--end互斥
+--time-semantics          | virtual-utc-v1      | enum          | virtual-utc-v1             | 时间 | 写入清单
+--realtime-pacing         | false               | bool          |                            | 时间 | true仅调试
+--topology-hold           | sample-and-hold     | enum          | sample-and-hold            | 时间 | [t_k,t_k+1)，末片至end
+--position-hold           | sample-and-hold     | enum          | sample-and-hold            | 时间 | 中间时刻不插值
+--max-same-time-microsteps| 1000000             | 计数          | 1..2^32-1                  | 调度 | 零时间活锁上限
+--timer-wheel-levels      | 5(常量)             | 计数          | 5                          | 调度 | 每层256槽，L0=1ms
+--seed                    | 20261013            | u64           | 0..2^64-1                  | 调度 | 与上游示例一致
+--- 路由与链路 ---
+--route-policy            | min-delay-v1        | enum          | min-delay-v1/min-hop-v1    | 网络 | 整数delay_us权重，tie节点id升序
+--route-recompute         | per-slice           | enum          | per-slice                  | 网络 | 每片重算
+--edge-down-policy        | edge-down-policy-v1 | enum          | edge-down-policy-v1        | 网络 | 排队/未完成发送drop，在传播交付
+--queue-model             | drop-tail           | enum          | drop-tail                  | 网络 | 每有向链路独立
+--queue-capacity          | 100                 | 包            | 1..2^32-1                  | 网络 | 与上游适配缺省一致
+--mtu                     | 1500                | B             | 576..9000                  | 网络 | 含IP头
+--loss-model              | ideal-loss-v1       | enum          | ideal-loss-v1/bernoulli-v1 | 网络 | 信道随机误包模型
+--loss-rate               | 0                   | 比例          | [0,1]                      | 网络 | 默认0；仅bernoulli-v1生效
+--jitter-model            | none                | enum          | none/gaussian-v1           | 网络 | 默认无微观抖动
+--jitter-sigma-ns         | 0                   | ns            | 0..10^9                    | 网络 | 仅gaussian-v1生效
+--processing-extra-us     | 0                   | us            | 0..10^6                    | 网络 | 额外处理延迟；delay_us已含上游processing
+--serialization           | enabled             | enum          | enabled/disabled           | 网络 | size*8/capacity
+--link-setup-delay-us     | 0                   | us            | 0..10^6                    | 网络 | 与上游setup_delay0一致
+--- 默认流量/探测（builtin:default_probe使用） ---
+--traffic-protocol        | udp                 | enum          | udp/tcp                    | 流量 | 与上游适配缺省一致
+--traffic-src             | first-user          | enum/节点id   | first-user/first-ground/<id> | 流量 | 首个kind=1节点
+--traffic-dst             | first-ground        | enum/节点id   | first-ground/first-user/<id> | 流量 | 首个kind=2节点
+--traffic-rate-bps        | 1000000             | bit/s         | 1..2^63-1                  | 流量 | 1 Mbit/s
+--traffic-packet-bytes    | 1200                | B             | 1..mtu-28                  | 流量 | UDP载荷
+--traffic-start-s         | 0                   | s(相对)       | >=0                        | 流量 | 相对仿真起点
+--traffic-end-s           | computed            | s(相对)       | <=duration                 | 流量 | 默认=duration
+--probe-interval-s        | 10                  | s             | >0                         | 流量 | traceroute周期
+--report-interval-s       | 1                   | s             | >0                         | 流量 | 统计区间
+--tcp-algorithm           | cubic               | enum          | cubic/reno                 | 流量 | 仅tcp
+--tcp-mss                 | 1448                | B             | 536..mtu-52                | 流量 | 仅tcp
+--tcp-initial-cwnd        | 10                  | 段            | 1..1000                    | 流量 | 仅tcp
+--tcp-rto-min-ms          | 200                 | ms            | 1..60000                   | 流量 | 仅tcp
+--- 测量工具兼容 ---
+--traceroute-max-hops     | 32                  | 跳            | 1..32                      | 测量 | 与SRS结构一致
+--traceroute-probes       | 3                   | 计数          | 1..3                       | 测量 | 每跳探针
+--traceroute-timeout-s    | 5                   | s             | >0                         | 测量 | 单探针超时
+--traceroute-facade       | text-v1             | enum          | text-v1                    | 测量 | 冻结文本格式版本
+--iperf-schema            | iperf3-compat-v1    | enum          | iperf3-compat-v1           | 测量 | 冻结JSON字段集版本
+--ip-mapping              | synthetic-v1        | enum          | synthetic-v1               | 测量 | 10.(id>>16&255).(id>>8&255).(id&255)
+--- 带宽模型 ---
+--bandwidth-model         | fluid               | enum          | fluid/packet               | 网络 | 默认流体Max-Min
+--fluid-recompute         | on-change           | enum          | on-change                  | 网络 | 流集合或片变化时重算
+--- 资源 ---
+--threads                 | 2                   | 计数          | 1..65535                   | 资源 | 与上游默认一致，不读硬件数
+--memory-budget-bytes     | 268435456           | B             | >=16777216                 | 资源 | 256 MiB，超出明确失败
+--event-pool              | 1048576             | 项            | 1024..2^32-1               | 资源 | 64B/项
+--packet-pool             | 1048576             | 项            | 1024..2^32-1               | 资源 | 64B/项
+--flow-pool               | 4096                | 项            | 1..2^32-1                  | 资源 |
+--probe-pool              | 65536               | 项            | 1..2^32-1                  | 资源 |
+--frame-arena-bytes       | 16777216            | B             | >=1048576                  | 资源 | 协程/任务帧
+--csr-cache-slices        | 2(常量)             | 片            | 2                          | 资源 | current/next
+--backend                 | cpu                 | enum          | cpu/cuda/auto              | 资源 | cuda不可用报Device，auto才回退
+--cuda-graph-batch        | 1000                | 步            | 1..10^6                    | GPU  | 仅cuda
+--tps-mode                | off                 | enum          | off/exact/approx           | GPU  | 默认不启用时间并行
+--tps-slices              | 1                   | 计数          | 1..1024                    | GPU  | 仅tps启用
+--tps-warmup-s            | 0                   | s             | >=0                        | GPU  | 仅approx
+--- 验证、运行与安全 ---
+--allow-unverified-source | false               | bool          |                            | 加载 | 等价graph-only的显式开关并记录
+--watchdog-s              | 0(disabled)         | s(主机)       | 0 或 >0                    | 运行 | 触发为aborted
+--checkpoint              | disabled            | enum          | disabled/enabled           | 运行 |
+--checkpoint-interval-s   | 600                 | s(虚拟)       | >0                         | 运行 | 仅enabled
+--resume                  | none                | 路径          | 存在                       | 运行 | 校验run_id/输入hash/配置一致
+--fuzz                    | disabled            | enum          | disabled/enabled           | 测试 |
+与上游一致项：seed20261013、drop-tail/100包、MTU1500、UDP/1200B/1Mbit/s、首user到首ground、
+interval1s、信道随机误包none(loss-rate=0)、路由最短传播时延/tie按节点id、sample-and-hold、
+setup_delay0、threads2、memory budget268435456B。
+loss-rate=0不表示端到端零丢包：拥塞、队列满、断链丢包仍存在并计入统计。
+默认值一旦改变必须升版本号并在清单中体现；默认表由defaults.hpp导出后冻结比对。
+
+14.3 defaults.hpp 注册表（接口）
+struct ParamSpec {
+ std::string_view name,unit,description;
+ ParamType type;               // Bool/U64/I64/F64/Enum/Path/UtcNs/Seconds
+ DefaultKind kind;             // Literal/Computed/Disabled/Constant
+ std::string_view literal;     // 字面默认；Computed/Disabled时为规则名
+ Range range;                  // 数值域或enum集合
+ Stage stage;                  // Load/Time/Schedule/Network/Traffic/Measure/Resource/Gpu/Output/Run
+ bool affects_business_run_id; // 是否参与业务规范化
+};
+constexpr std::array<ParamSpec,N_PARAMS> kParams={...};   // 唯一来源
+Status ResolveEffectiveConfig(const CliArgs&,const ConfigFile*,const Env&,EffectiveConfig&);
+Status ExportDefaultsJson(std::string_view path);          // 由kParams生成
+Status WriteEffectiveConfig(const EffectiveConfig&,std::string_view path); // 值+来源
+构建期测试：每项非空name/unit/description/range/stage；所有CLI选项在表内；
+--help由表生成并与defaults.json逐项一致；14.2表与导出比对，不一致则文档或代码必须修订。
+Computed规则：start=首片timestamp；end=末片timestamp+step；duration=end-start；
+traffic-end=duration；source-dir=manifest所在目录+products.source_file。
+
+14.4 内置默认脚本 builtin:default_probe（语义）
+async def main(cfg):
+  src = first_node(kind=1) ; dst = first_node(kind=2)
+  if src is None or dst is None:
+    log("no_traffic", reason="missing user or ground node"); return
+  start_flow(cfg.traffic_protocol, src, dst, rate=cfg.traffic_rate_bps,
+             packet=cfg.traffic_packet_bytes, t0=cfg.traffic_start_s,
+             t1=cfg.traffic_end_s, report=cfg.report_interval_s)
+  while now_monotonic() < cfg.duration:
+    r = traceroute(src, dst, max_hops=cfg.traceroute_max_hops,
+                   probes=cfg.traceroute_probes, timeout=cfg.traceroute_timeout_s)
+    log_probe(r)                       # 使用仿真时间
+    await asyncio.sleep(cfg.probe_interval_s)
+全部参数来自EffectiveConfig；脚本不含硬编码数字；输出遵循06.4业务记录格式。
+无user/ground节点时记录no_traffic并正常结束，退出0。
+
+14.5 零参数默认流程
+hypersim <network_input>
+ -> 判定输入类型(目录/manifest/.ngb) -> 加载kParams缺省（无文件/环境/CLI覆盖）
+ -> strict验证(图+源) -> start/end由输入推导 -> 创建run_NNNNNN -> 写effective_config.json
+ -> 运行builtin:default_probe -> 业务日志(jsonl)+performance.json -> 成功清单 -> 退出0
+任一步失败：按ErrorCode退出，运行目录保留错误报告，不写成功清单。
+
+14.6 测试
+ZERO-T01 仅给网络目录 -> 退出0，生成effective_config.json/业务日志/performance/成功清单。
+ZERO-T02 仅给manifest.json或单个.ngb -> 同T01；单.ngb缺源在strict下失败并提示路径规则。
+ZERO-T03 effective_config.json每项来源=default，值与14.2表逐项一致（自动比对导出表）。
+ZERO-T04 --help/defaults.json/effective_config参数集合与默认值一致。
+ZERO-T05 新增未登记参数 -> 构建测试失败。
+ZERO-T06 未知CLI参数/未知配置键 -> Arg/Config退出码，不静默忽略。
+ZERO-T07 显式非法值(如--loss-rate 1.5) -> 拒绝，不回退默认。
+ZERO-T08 默认start/end等于首片timestamp和末片timestamp+step；主机日期无关。
+ZERO-T09 默认loss-rate=0：无信道随机丢包；构造拥塞仍出现队列丢包并被统计。
+ZERO-T10 D11无地面节点 -> 流量为空、no_traffic记录、退出0。
+ZERO-T11 重复零参数运行 -> run_000001、run_000002…不覆盖；--output非空目录拒绝。
+ZERO-T12 同输入两次零参数运行 -> 业务日志SHA一致（默认seed固定）。
+ZERO-T13 优先级：file设loss-rate0.1、env设0.2、cli设0.3 -> 生效0.3且来源记录正确。
+ZERO-T14 D4/D5真实上游输出零参数运行通过。
+
+14.7 验收
+AC13 零参数运行：ZERO-T01..14全部通过；14.2表与程序导出逐项一致；强制项。
+AC14 默认值不得引用未交付的外部文件、网络资源或主机当前时间；强制项。
+
+================================================================================
+规范性附录：上游原文摘录。字节布局以此为准；HyperSim运行扩展不得改变它。
+================================================================================
+
+附录A SATNET/源绑定/manifest原文
+12. 网络图输出：SATNET v1
+
+12.1 文件映射与目录（NET-OUT-001）
+
+SATNET 是独立网络容器，不改变 SATC 的 version_major 或原四类 file_kind。
+每个轨道 SAMPLES 包必须对应一个同 stem 的 `.ngb`，网络不得重新分包：M、t0_ns、step_ns、global_index0 与源包完全相同。索引j处的timestamp逐纳秒一致。
+
+output/
+├── orbits/                  # 原轨道程序输出；亦可位于orbits/samples
+├── graphs/
+│   ├── pred_000000.ngb      # 对应pred_000000.sbin
+│   └── ...
+├── nodes.json              # 节点和两个XML哈希
+├── nodes.bin               # 当前主机准备阶段的内部文件，不是公共交换格式
+├── run.json                # 本次网络策略与实际后端
+└── manifest.csv            # orbit_file,graph_file,slices,directed_edges
+
+示例使用顺序编号；若源包有时间戳命名，则保留其stem。必须拒绝会产生同名图文件的源包冲突。补齐卫星列不能成为图节点。允许一片零条边，不允许因无连接而省略整个时间片。
+
+12.2 通用规则（NET-FMT-001）
+
+全部多字节字段小端；整数宽度由 uint32/uint64/int64 明确，不使用平台相关 unsigned long 的大小。浮点为binary64。结构必须按偏移序列化，不依赖C++默认填充。
+
+文件布局：256 B头→UTF-8 JSON metadata→64 B对齐时间索引→4096 B对齐边数据→32 B尾。对齐空隙为0。CRC统一为CRC-32C，与SATC一致；零字节载荷CRC为0。
+
+12.3 文件头（256 B）
+
+| 偏移 | 长度 | 类型 | 字段 | 要求 |
+|---|---:|---|---|---|
+| 0 | 8 | char[8] | magic | `SATNET1\0`（7字符+NUL） |
+| 8 | 2 | u16 | version_major | 1；未知主版本拒绝 |
+| 10 | 2 | u16 | version_minor | 1（本重建完整自描述约定）；旧0保留读取 |
+| 12 | 4 | u32 | header_size | 256 |
+| 16 | 4 | u32 | flags | bit0=1表示未提供源轨道SHA256；其余保留0 |
+| 20 | 4 | u32 | node_count | 卫星+user+ground_station |
+| 24 | 4 | u32 | M | 本包时间片数 |
+| 28 | 4 | u32 | edge_size | 32 |
+| 32 | 8 | u64 | metadata_offset | 256 |
+| 40 | 8 | u64 | metadata_size | 不含对齐填充 |
+| 48 | 8 | u64 | time_index_offset | 64B对齐 |
+| 56 | 8 | u64 | payload_offset | 4096B对齐 |
+| 64 | 8 | i64 | t0_ns | 首片UTC POSIX纳秒 |
+| 72 | 8 | i64 | step_ns | 与源包相同 |
+| 80 | 8 | u64 | global_index0 | 与源包相同 |
+| 88 | 8 | u64 | total_edges | 本文件各片有向边数之和 |
+| 96 | 8 | u64 | file_size | 包含文件尾 |
+| 104 | 32 | u8[32] | source_orbit_sha256 | flags bit0=0时有效；bit0=1时必须全0 |
+| 136 | 116 | u8[116] | reserved | 全0 |
+| 252 | 4 | u32 | header_crc32c | 头0–251字节CRC |
+
+旧数据允许flags=1但必须明确UNBOUND。本重建基线的新图必须在实际生成时写源轨道SHA256并置flags bit0=0；完整绑定规则见本节补充。
+
+12.4 元数据（NET-FMT-002）
+
+JSON UTF-8，至少包含：
+- `nodes`：按图id排列的完整节点数组。每节点含id、kind（0卫星/1user/2ground_station）、name、uplink_bps、downlink_bps、antennas。
+- 卫星含gid、layer、plane、slot、P、S；地面节点含ECEF坐标和局部up向量。
+- `satellite_xml_sha256` 与 `ground_xml_sha256`：原始XML字节摘要。
+- `source_hash_available`：与头flags语义一致。
+- 模型假设说明：固定地面、双工占天线规则、按链路容量、工程衰减、是否含处理延迟。
+
+卫星metadata的xyz/up若填0只能是占位，真实位置来自对应轨道片。本重建新图必须独立携带实际policy、模型版本、输入摘要和源轨道精度/坐标说明；使用minor=1标识这套完整自描述约定。旧minor=0见F-MIG，不以补metadata伪装旧数据本来完整。
+
+12.5 时间索引（每片32 B）
+
+Python struct表示为 `<qQQII`：
+
+| 偏移 | 类型 | 内容 |
+|---|---|---|
+| 0 | i64 | timestamp_ns = t0_ns+j×step_ns |
+| 8 | u64 | edge_offset，绝对文件偏移 |
+| 16 | u64 | edge_count，本片有向边条数 |
+| 24 | u32 | 本片边区CRC32C |
+| 28 | u32 | 保留0 |
+
+时间索引固定M项。各片边区连续，后片起点等于前片起点+32×edge_count；0条边合法，此时偏移可与下一片相同。
+
+12.6 有向边（每条32 B，NET-FMT-003）
+
+| 偏移 | 长度 | 类型 | 字段 |
+|---|---:|---|---|
+| 0 | 4 | u32 | src |
+| 4 | 4 | u32 | dst |
+| 8 | 4 | u32 | delay_us |
+| 12 | 8 | u64 | bandwidth_bps |
+| 20 | 8 | f64 | distance_m |
+| 28 | 4 | u32 | kind：0 ISL、1 接入 |
+
+Python struct为 `<IIIQdI`，大小32。bandwidth在偏移12，不是自然8字节对齐；C++不得直接reinterpret_cast带默认填充的结构。字段 src/dst 为图节点索引，不是global_id。
+
+同片按(src,dst)升序、禁止自环和重复方向边。bandwidth必须>0、distance必须有限且>0；两个方向各写一条，可只有单方向。delay单位为微秒，不是毫秒或纳秒。上层可利用distance复核传播时延。
+
+12.7 文件尾（32 B）
+
+`<8sIIQQ`：
+
+| 偏移 | 类型 | 字段 |
+|---|---|---|
+| 0 | char[8] | `NETEND1\0` |
+| 8 | u32 | 时间索引CRC32C |
+| 12 | u32 | metadata CRC32C |
+| 16 | u64 | file_size |
+| 24 | u64 | payload_bytes = total_edges×32 |
+
+读取器必须检查段边界、整数乘法溢出、重叠、文件大小、每片时间/CRC、节点编号、有限数值、边总数与payload长度。不能因为同包两个异常字段互相吻合就跳过范围校验。
+
+12.8 netread 与错误处理（NET-READ-001）
+
+netread info FILE.ngb
+netread verify FILE.ngb
+netread csv FILE.ngb output.csv
+
+CSV列固定 `t_ns,src,dst,delay_us,bandwidth_bps,distance_m,kind`。导出前必须验证完整性。读取失败返回非零：参数1、配置2、I/O3、完整性7，按统一ErrorCode分类。
+
+图文件先写.part，完成头/索引/载荷/尾后flush并关闭，同文件系统原子rename；失败清理未完成图。跨平台崩溃持久性fsync/FlushFileBuffers与整次运行事务为F-RELIABILITY，未实现前必须声明持久性限制，不得把部分图声明为整次成功。
+
+---
+
+6.A 自动源轨道绑定（B中必须实现）
+每个图的source_orbit_sha256是实际读取的完整.sbin文件字节SHA256，不是XML摘要、张量CRC、网络搜索所得常数。
+轨道程序完成发布后建立稳定源快照（可复制并流式hash）；网络从同一快照读取，处理期间源变化必须失败。
+图生成当时写头104..135的原始32字节，flags bit0=0，metadata同步64小写hex与source_hash_available=true。
+metadata还包含software_version、actual_backend、源accuracy_class与坐标近似、全部effective_policy、拓扑/资源/衰减/时延模型名和版本、两个XML原始SHA。
+新图minor=1表示完整自描述约定；旧major1/minor0可以结构读取，但未绑定者不能声称source verified。
+metadata扩展仍是JSON，不改变固定边区/头offset。future minor新增键时reader应跳过未知键，未知major拒绝。
+
+netread verify FILE.ngb默认只能声明GRAPH_INTEGRITY_OK。
+netread verify FILE.ngb --source-orbit FILE.sbin要求源SHA、源完整性、ECEF、M/t0/step/k0/成员ID都匹配，才声明SOURCE_VERIFIED。
+图提供同历元同gid只是必要条件，不证明历史计算因果。不得用另一个同名/同时间文件猜补真实来源。
+旧图补绑定工具输出新文件，不能覆盖冲突已有hash；重排metadata长度相关offset/index/footer/CRC，边载荷字节必须不变。
+之后更新图文件SHA与运行manifest；仅写头32字节但不改metadata/CRC是不合法补丁。
+
+6.B 统一网络manifest（新基线）
+manifest.json为正式交换清单，至少有format=SATNET-1.1、software、run、inputs、nodes、products、warnings。
+software{version,build_flags,actual_backend}；run{start_ns,end_ns,step_ns,topology,policy,models}；
+inputs{satellite_xml_sha256,ground_xml_sha256,external_data[{role,sha256,size}]}；nodes{satellites,ground,total}。
+products每项{source_file,source_sha256,graph_file,graph_sha256,M,t0_ns,global_index0,directed_edges}。
+manifest.csv可额外导出，不作为唯一权威清单。内部nodes.bin只是准备适配，不要求用户提供它才能使用两个XML。
+
+
+附录B SATC原文
+5. SATC v3轨道协议（B必须SAMPLES；其他产品为F）
+------------------------------------------------------------------------------
+下列字段布局统一保留。它是格式定义，不表示所有file_kind首版都要实现。
+其中INITIAL/CHECKPOINT/CHEB和相关扩展段在第9.3节F-PRODUCT实施；B不生成不完整文件假装支持。
+2. 输出数据结构：SATC v3 统一容器
+
+2.1 文件类别
+
+| file_kind | 扩展名 | 内容 | 必须包含的段 |
+|---|---|---|---|
+| 1 SAMPLES | `.sbin` | 采样坐标（主产品） | SAT_TABLE、NAME_TABLE、TIME_INDEX、DATA_TENSOR |
+| 2 CHEB | `.scheb` | 切比雪夫星历（可选产品） | SAT_TABLE、NAME_TABLE、SEG_INDEX、CHEB_TENSOR |
+| 3 INITIAL | `.sinit` | 初始状态 | SAT_TABLE、NAME_TABLE、STATE_TENSOR、PHYS、LAYER_PATTERN、PROVENANCE |
+| 4 CHECKPOINT | `.sckpt` | 阶段 A 断点 | SAT_TABLE、STATE_TENSOR |
+
+STATUS_EVENTS 与 EDIT_LOG 为可选段（规则见各段定义）。
+
+2.2 通用规则
+
+1. 所有多字节字段为小端；结构无隐式填充，所有偏移在本文档中显式给出。
+2. 浮点为 IEEE 754 binary64；整数为二进制补码。
+3. 字符串字段为 UTF-8，定长，不足部分以 0x00 填充；长度用满时不保证有结束符。
+4. 时间：int64，UTC POSIX 纳秒（自 1970-01-01T00:00:00Z 起，不计闰秒）；输出网格不包含 23:59:60。
+5. 长度单位 m，速度单位 m/s，角度单位 rad（仅内部使用）。
+6. 校验算法统一为 CRC-32C（Castagnoli，多项式 0x1EDC6F41，初值 0xFFFFFFFF，结果取反），自主实现，须通过 RFC 3720 测试向量。
+7. 段在文件中的顺序固定：段目录 → SAT_TABLE → NAME_TABLE → TIME_INDEX 或 SEG_INDEX → STATUS_EVENTS → PHYS → LAYER_PATTERN → PROVENANCE → EDIT_LOG → 张量段（DATA_TENSOR / CHEB_TENSOR / STATE_TENSOR）→ 文件尾。
+8. 张量段起始偏移必须 4096 字节对齐（满足 O_DIRECT 和 GPUDirect Storage 读取）；其他段 64 字节对齐；对齐填充字节为 0x00。
+9. 读取方遇到未知段类型必须跳过而不报错；遇到未知的 version_major 必须拒绝。
+
+2.3 文件布局
+
++----------------------------+ 0
+| FileHeader (512 B)         |
++----------------------------+ 512
+| SectionDirectory           |  section_count × 32 B
++----------------------------+ (64 对齐)
+| SAT_TABLE / NAME_TABLE     |
+| TIME_INDEX | SEG_INDEX     |
+| STATUS_EVENTS (可选) ...   |
++----------------------------+ (4096 对齐)
+| 张量段                      |  DATA_TENSOR = M × slice_stride
+|  slice 0: [x][y][z]...     |  每个平面 Ns × elem_size
+|  slice 1: ...              |
++----------------------------+
+| Footer (32 B)              |
++----------------------------+ file_size
+
+2.4 文件头 FileHeader（512 字节）
+
+| 偏移 | 长度 | 类型 | 字段 | 规定 |
+|---|---|---|---|---|
+| 0 | 8 | char[8] | magic | `"SATCONT3"` |
+| 8 | 2 | u16 | version_major | 3 |
+| 10 | 2 | u16 | version_minor | 0 |
+| 12 | 4 | u32 | header_size | 512 |
+| 16 | 1 | u8 | endian | 1 = 小端（唯一合法值） |
+| 17 | 1 | u8 | file_kind | 1 SAMPLES / 2 CHEB / 3 INITIAL / 4 CHECKPOINT |
+| 18 | 1 | u8 | frame | 0 ECEF(ITRS) / 1 GCRS / 2 TEME |
+| 19 | 1 | u8 | accuracy_class | 0 = A（hpop-cheb，满足 D3）；2 = C（sgp4/j2/kepler，不保证 D3） |
+| 20 | 4 | u32 | section_count | ≥ 1 |
+| 24 | 8 | u64 | section_dir_offset | 512 |
+| 32 | 4 | u32 | N | 卫星数 |
+| 36 | 4 | u32 | Ns | roundup(N, 64) |
+| 40 | 4 | u32 | M | 本文件的时间片数（SAMPLES）、段数（CHEB）、1（INITIAL/CHECKPOINT） |
+| 44 | 4 | u32 | M_full | 满包时的 M |
+| 48 | 8 | i64 | t0_ns | 本文件第一个时间片/段/状态的时刻 |
+| 56 | 8 | i64 | step_ns | SAMPLES：采样步长；CHEB：段长 L；其他为 0 |
+| 64 | 8 | i64 | run_start_ns | 运行起点（= 初始状态历元） |
+| 72 | 8 | i64 | run_end_ns | 运行终点（不含） |
+| 80 | 8 | u64 | global_index0 | 本文件第一个时间片/段的全局编号 |
+| 88 | 4 | u32 | file_index | 同一产品内从 0 开始的编号 |
+| 92 | 4 | u32 | total_files | 同一产品的文件总数 |
+| 96 | 1 | u8 | elem_type | 0 F64 / 1 Q32（CHEB、INITIAL、CHECKPOINT 必须为 0） |
+| 97 | 1 | u8 | C | 分量数：3（位置）或 6（位置+速度） |
+| 98 | 1 | u8 | comp_mask | bit0–2 = x,y,z；bit3–5 = vx,vy,vz |
+| 99 | 1 | u8 | cheb_degree | CHEB 产品为 7，其他为 0 |
+| 100 | 4 | u32 | flags | bit0 include_missing；bit1 含 STATUS_EVENTS；bit2 日历对齐；bit3 确定性构建 |
+| 104 | 8 | f64 | q_pos | Q32 位置量化步长（m/LSB），F64 时为 0 |
+| 112 | 8 | f64 | q_vel | Q32 速度量化步长（m/s/LSB），F64 时为 0 |
+| 120 | 8 | u64 | plane_stride | Ns × elem_size（字节） |
+| 128 | 8 | u64 | slice_stride | C × plane_stride（字节）；CHEB 为一段的字节数 |
+| 136 | 8 | i64 | package_duration_ns | 包时长 D |
+| 144 | 8 | u64 | geometry_hash | 星座几何规范化后 SHA-256 的前 8 字节（小端解释） |
+| 152 | 8 | u64 | config_hash | 原始 XML 字节 SHA-256 的前 8 字节 |
+| 160 | 8 | u64 | initial_state_hash | 所用 .sinit 文件 SHA-256 的前 8 字节 |
+| 168 | 32 | u8[32] | run_id | 运行参数规范化后的 SHA-256 |
+| 200 | 16 | char[16] | propagator | 如 `"hpop-cheb"` |
+| 216 | 16 | char[16] | backend | 生成该文件的后端，如 `"cuda:sm_89"`、`"cpu"` |
+| 232 | 16 | char[16] | time_scale | `"UTC-POSIX"` |
+| 248 | 32 | char[32] | t0_iso | 如 `"2026-01-01T00:00:00.000Z"` |
+| 280 | 4 | u32 | generator_version | 初始状态生成算法版本 |
+| 284 | 4 | u32 | software_version | (major<<16) \| (minor<<8) \| patch |
+| 288 | 220 | u8[220] | reserved | 全 0 |
+| 508 | 4 | u32 | header_crc32c | 对 0–507 字节计算 |
+
+> 说明：`backend` 只用于溯源；确定性构建下不同后端生成的张量逐字节相同，但文件头的 backend 字段与 header_crc32c 可能不同。逐字节一致性比较以张量段和 TIME_INDEX 为准。
+
+2.5 段目录 SectionEntry（每项 32 字节）
+
+| 偏移 | 长度 | 类型 | 字段 |
+|---|---|---|---|
+| 0 | 4 | u32 | type（见 2.6） |
+| 4 | 2 | u16 | align_log2（6 或 12） |
+| 6 | 2 | u16 | flags（保留，0） |
+| 8 | 8 | u64 | offset（自文件起点） |
+| 16 | 8 | u64 | size（字节，不含对齐填充） |
+| 24 | 4 | u32 | crc32c（对段内容；SAMPLES/CHEB张量填0，由片/段CRC保证；STATE在v3.1按9.3写实际CRC） |
+| 28 | 4 | u32 | reserved |
+
+2.6 段定义
+
+0x01 SAT_TABLE（卫星表，SoA）
+
+按以下顺序存放各列，每列长度为 Ns，每列起点 64 字节对齐；补齐部分（i ≥ N）全 0，`global_id` 填 0xFFFFFFFF。
+
+| 列 | 类型 | 含义 |
+|---|---|---|
+| global_id | u32[Ns] | 按 (layer, plane, slot) 字典序分配给所有名义槽位，缺失卫星也占号 |
+| layer | u16[Ns] | 层编号 |
+| plane | u16[Ns] | 轨道面编号 |
+| slot | u16[Ns] | 面内槽位编号 |
+| status0 | u8[Ns] | t0 时刻的状态：0 OK / 1 DAMAGED / 2 MISSING |
+| flags | u8[Ns] | bit0 custom（被编辑并脱离星座规则）；bit1 tle 层 |
+
+卫星列顺序 i 在一次运行的所有文件中必须相同，并按 global_id 升序排列。
+
+0x02 NAME_TABLE
+
+char[24] × Ns，格式为 `L{layer}-P{plane:02}-S{slot:03}`，或 XML/TLE 中给出的名称（超长截断）。
+
+0x03 TIME_INDEX（仅 SAMPLES）
+
+| 子数组 | 类型 | 长度 | 规定 |
+|---|---|---|---|
+| t_ns | i64 | M | 必须等于 t0_ns + j × step_ns；读取方必须校验 |
+| slice_crc | u32 | M | 第 j 片张量字节（slice_stride 字节）的 CRC-32C |
+
+两个子数组之间按 64 字节对齐。
+
+0x04 STATUS_EVENTS（可选）
+
+仅当本文件时间范围内有卫星状态变化时出现，flags bit1 置 1。
+
+| 偏移 | 类型 | 字段 |
+|---|---|---|
+| 0 | u32 | count |
+| 4 | u32 | reserved |
+| 8 起，每项 24 B | u32 sat_index, u8 status, u8[3] 0, i64 from_ns, i64 to_ns | 区间 [from, to)，按 (sat_index, from_ns) 排序，区间不得重叠 |
+
+0x10 DATA_TENSOR（仅 SAMPLES）
+
+- 形状：`[M][C][Ns]`，元素类型由 elem_type 决定；分量顺序按 comp_mask 位序（x, y, z, vx, vy, vz）。
+- 字节偏移公式：
+
+\[
+\text{off}(j,c,i)=\text{tensor\_offset}+j\cdot\text{slice\_stride}+c\cdot\text{plane\_stride}+i\cdot\text{elem\_size}
+\]
+
+- 补齐元素（i ≥ N）与缺失卫星（仅 include_missing 时出现）：Q32 填 `INT32_MIN`（哨兵值），F64 填 quiet NaN `0x7FF8000000000000`。
+- 损坏卫星：正常输出名义轨道坐标，状态见 SAT_TABLE.status0 与 STATUS_EVENTS。
+
+0x11 SEG_INDEX（仅 CHEB）
+
+i64 seg_t0_ns[M]（第 s 段起点）；u32 seg_crc[M]（第 s 段系数字节的 CRC-32C）。
+
+0x12 CHEB_TENSOR（仅 CHEB）
+
+- 形状：`[M][3][D+1][Ns]`，f64，D = cheb_degree = 7；坐标系为 header.frame。
+- 求值：对时刻 t，取 \(s=\lfloor (t-t_{run})/L\rfloor\)，\(\tau = 2(t-t_s)/L-1\in[-1,1)\)，\(\mathbf r(t)=\sum_{n=0}^{D} \mathbf a_{s,n} T_n(\tau)\)；速度 \(\mathbf v=\frac{2}{L}\sum_n \mathbf a_{s,n}T_n'(\tau)\)。
+- 相邻段在边界处位置、速度连续（共享 Hermite 节点）。
+
+0x20 STATE_TENSOR（INITIAL / CHECKPOINT）
+
+`[6][Ns]` f64：x, y, z, vx, vy, vz。INITIAL 文件允许 frame 为 ECEF/GCRS/TEME（读入后统一转 GCRS）；CHECKPOINT 必须为 GCRS。
+
+0x21 PHYS（仅 INITIAL）
+
+`[5][Ns]` f64：质量 kg、阻力面积 m²、Cd、光压面积 m²、Cr。
+
+0x22 LAYER_PATTERN（仅 INITIAL）
+
+每层 128 B：
+
+| 偏移 | 类型 | 字段 |
+|---|---|---|
+| 0 | u16 layer, u8 pattern(0 delta/1 star/2 explicit/3 tle), u8 elem_kind(0 Brouwer–Lyddane 平根) | |
+| 4 | u32 P, u32 S, u32 F | |
+| 16 | f64 a_m, e, inc, raan0, u0, argp | 平根 |
+| 64 | u8[64] | 保留 0 |
+
+0x23 PROVENANCE（仅 INITIAL）
+
+u8[Ns]：0 生成 / 1 被编辑 / 2 自适应调整 / 3 锁定。
+
+0x24 EDIT_LOG（可选，仅 INITIAL）
+
+UTF-8 JSON 数组，每项为一条编辑操作的完整参数和时间戳（操作时间不参与任何哈希）。
+
+2.7 文件尾 Footer（32 字节）
+
+| 偏移 | 类型 | 字段 |
+|---|---|---|
+| 0 | char[4] | `"SEND"` |
+| 4 | u32 | dir_crc32c（段目录的 CRC） |
+| 8 | u64 | file_size |
+| 16 | u64 | tensor_bytes |
+| 24 | u8[8] | 保留 0 |
+
+本文件对上述布局的约束解释：
+- B输出F64 posvel，N有效成员，Ns按64补齐；未实现Q32不能用f32冒充。
+- CRC反射poly=0x82F63B78，seed0对应内部FFFFFFFF，结果取反；123456789=E3069283；增量seed用上一最终返回值。
+- 状态：SAT_TABLE.status0是每包首片实际状态，临时事件按本包区间切成恒定状态段，仅写不同于本包基线的区间，包含恢复段。
+  每包可独立解释；跨包不能强求status0相同。event排序/不重叠/半开、padding/enum/reserved全验证。
+- CHEB的slice_stride=3*8*Ns*8；系数a0不减半；SEG_INDEX两子数组间64对齐。
+- STATE完整性采用第9.3节SATC3.1目录真实CRC方案；旧3.0保留遗留标签，不能声明完整验证。
+- frame兼容编号不认证严格参考系；manifest另记录approximate_J2000_mean_axes或实际ECEF近似算法。
+- 任何offset/size的加乘先检查溢出，再校验范围/重叠；未知段只跳过其结构，不跳过边界检查。
+- B轨道manifest至少含软件/构建选项/实际backend、start/end/step、坐标近似、force/integrator、N/Ns、输入/初值/phys/数据来源、包文件M/k0/size/hash、失败星与告警。
+  每个输入实际字节SHA冻结。成功manifest只在全部必需包完成后原子发布。
+- C-N手动D默认60s，文件pred_{index:06d}.sbin，尾包不足合法。自动包与时间命名是F-PACK。
+
+
+
+附录C run_id/配置/仿真适配/读取验收原文
+10. manifest、run_id与用户配置完整契约
+==============================================================================
+10.1 规范化
+原输入实际字节SHA256包括BOM；几何按第2章geometry-v2；初值hash为筛后[N][6]小端binary64未padding字节。
+canonical对象键Unicode码点顺序、无空白、UTF8非ASCII直接写；整数十进制；浮点-0归+0后为f64:16位big-endian hex；
+bool/null是JSON原类型，拒NaN/Inf。数组保序，在建数组时按下面明示排序，不笼统“语义排序”。
+轨道run_id=SHA256('satpred-run-v1\0'+对象)：schema orbit-run-1、software_version、model c-rk8-v1、
+canonical geometry-v2、geometry_sha256/config_sha256/initial_state_sha256、start/end/step/package_ns、frame_method、
+force所有开关/Jn/scale、integrator{max_h_ns,env_step_ns}、environment_defaults全部EOP标量、
+catalog[{gid,name,status_base,radio全部值,phys全部值}]、status_events[{gid,status,from_ns,to_ns}]、external[{role,hash,size}]。
+catalog按gid，events按gid/from/to，external按role/hash；fault完整输入区间纳入而非仅本次裁剪。
+网络run_id=SHA256('satnet-run-v1\0'+对象)：schema network-run-1/software_version/start/end/step、
+两个XML完整SHA、sources[{k0,sha256}]、nodes完整有效数组、policy第6章全部有效参数、models实际名版本。
+sources按k0，nodes按图id；输出路径/墙钟/主机/日志/batch/threads/backend排除，另写溯源。
+同有效数值默认/显式参数产生相同有效配置，原XML字节变更仍按其config_hash影响身份。
+
+10.2 正式清单
+轨道manifest：format SATPRED-B-1/status complete或complete_with_failures/software/run/inputs/catalog/phys_sources/products/failures/warnings。
+software含version/build_flags/compiler/python/numpy/actual_backend；run含run_id/time/step/package/frame_method/max_h/env_step；
+inputs含XML/geometry/初值/外部实际SHA/size/来源；products{file,M,M_full,t0_ns,k0,size,sha256}；
+failures{gid,time_ns,reason}，warnings字符串数组，catalog含N/Ns及稳定映射。
+网络manifest：format SATNET-1.1/status/software/run/inputs/nodes/products/warnings；
+run含run_id/start/end/step/topology/policy/models；inputs两个XML/外部/源摘要；nodes含satellites/ground/total；
+products{source_file,source_sha256,graph_file,graph_sha256,M,t0_ns,global_index0,directed_edges}。
+路径相对运行根，复用源复制至orbits；manifest.csv额外导出，不替代正式JSON。
+每图metadata必须nodes/两个XML SHA/source_hash_available/source_orbit_sha256/software_version/actual_backend/
+run_id/source_accuracy_class/source_frame_method/effective_policy/models/assumptions。
+models固定topology=实际名-v1/resource=duplex-shared-antennas-v1/bandwidth=distance-power-v1/
+delay=propagation-plus-processing-v1/occlusion=ellipsoid-segment-v1；assumptions标明非RF/无路由/固定地面/每链路容量。
+卫星metadata真实位置来自源片，xyz/up省略而不是用0冒充；ground使用xyz/up各3f64。
+JSON UTF8无BOM，重复键拒绝，u64无损解析；schema随源码交付并验证实际产物。
+
+10.3 全输入优先级与失败
+系统phys260kg/10m2/Cd2.2/10m2/Cr1.3；样例layer显式150kg/6m2/2.2/6m2/1.3。
+radio系统→根→层→explicit成员；phys同样再phys_json；ground defaults→单节点。
+初值NPY只替代状态，不改gid/几何/hash定义/phys；缺失星仍推进名义初值。source标签不是证据。
+任一输入未知字段/重复键/不finite/无效gid/形状错/越界拒绝，错误码按第1章；不下载/不回退隐藏模型。
+显式--orbit-dir与--orbit-program均给时，复用优先并警告；未给dir默认运行真实satpred。
+B satnet不透传settings，定制先satpred再复用。源包必须与CLI时段/网格相同，Catalog身份与XML一致。
+
+11.3 兼容JSON输出
+adapter.enabled=true、方向directed；exports每源包同stem.links.json，不改SATNET边布局。
+外层format satnet-links-1/run_id/源图和轨道SHA/models/slices；slice有timestamp_ns/valid_from/valid_to/links。
+link含endpoint1/endpoint2/rate/loss/delay/pos1/pos2，raw字段bandwidth_bps/delay_us/src/dst/xyz同时保留。
+名称用实际name，无name则sat{gid+1}；碰撞追加-gid；不可用筛后图id重新编号名字。
+rate单位Mbit/s小数6位，delay ms小数3位，loss="0.0"并标constant-ideal。
+pos顺序纬度deg/经度deg/椭球高km，lat/lon6位、alt2位；显示舍入不修改源数据或网络计算。
+WGS84大地转换：p=hypot(x,y)，lon atan2(y,x)，lat0 atan2(z,p*(1-e2))；
+N=a/sqrt(1-e2*sin²lat)，lat_new=atan2(z+e2*N*sinlat,p)，最多20次/角差1e-13rad；
+h=p*coslat+z*sinlat-a*sqrt(1-e2*sin²lat)。p<1e-9m用lat±pi/2/lon0/h=|z|-b；零地心拒绝。
+转换不收敛返回Internal；缺已绑定源不能猜补位置。零边片保留空links。
+
+11.4 后续仿真接口契约
+默认execute=false，只输出simulation_defaults.json，不冒称TCP/UDP已经运行。
+状态sample_and_hold：[t_k,t_k+1)，末片至run_end；不存在的边在该区间down。
+同时间事件顺序topology→routes→packets；断链排队包drop/在途未到达包drop；恢复队列empty；setup_delay0。
+每有向链路独立cap，全双工；每物理对消耗一根天线但不共享两个方向带宽。
+路由默认每片最短传播时延，tie按节点id；队列drop_tail/100packets/MTU1500B；
+默认UDP/包1200B/1Mbit/s/seed20261013，首user到首ground，start0/end duration，无对应节点则无流量。
+统计interval1s，信道随机误包none；仍允许拥塞/断链丢包，不能把loss0解释成端到端零丢包。
+序列化由后续仿真器按包长/cap求值；delay_us已有propagation+processing，不重复加distance/c或processing。
+路由与队列由下游实现；缺支持的适配器必须明确unsupported，不用空统计冒充仿真成功。
+
+12. 原生协议、事务、读取验证与实施验收
+==============================================================================
+12.1 引擎请求与名义状态
+命令保留orbit_engine_cpu states.txt env.bin M dt batch max_h flags stdout；M是窗口片数，batch只是输出块。
+states首行N后N行11值，按Catalog，finite；既有失败行用0占位且request.failed_indices令引擎禁止求值。
+request JSON {version:1,run_start_ns,window_t0_ns,step_ns,max_h_ns,M,N,batch,flags,failed_indices:[]}，
+放在states同目录，参数必须匹配；env relative_s相对run_start，不以首env猜历元。
+原始stdout恰[M][6][Ns]little double，padding quietNaN；日志stderr；短流/多余字节/非零退出失败。
+引擎只输出名义轨道，Python应用missing遮蔽/状态/CRC；否则无法从NaN恢复临时missing。
+引擎另原子写result JSON{version,M,N,final_time_ns,failed[{index,time_ns,reason}]}和final.npy[N,6]名义末态。
+失败行全NaN，下一窗口以失败索引携带；相邻窗口重叠一片，writer丢后窗首片；最后输出后不再推进。
+每调用独立缓存目录；环境全球网格start+j*env_step，覆盖全部级时间及Rdot±0.5s；有界窗口加载，M1用2节点不积分。
+内部nodes.bin内容UTF8 JSON{internal_format:"satnet-nodes-v1",nodes,两个XMLSHA,geometrySHA}，u64不得转double；
+节点id连续/数量范围/卫星映射和ground up单位长度1e-12校验，不需要用户提供。
+
+12.2 失败和预算
+单星首次finite/高度<100km失败隔离、后续NaN，保留首次time/reason，状态不是missing。
+其余星可完成，manifest complete_with_failures并warnings；全部星失败返回4、不发成功manifest。
+默认268435456B覆盖自有活跃states/K/环境/输出/候选/边，Python固定RSS和页缓存另报告；
+预检至少N*6*8*15+batch*6*Ns*8+env_count*31*8，网络候选实际容量动态计入。
+batch自动降到1；一片/状态或稠密候选超限失败，不分配全N²矩阵，不假称最坏O(NlogN)。
+读取mmap/片pread/流式SHA；不read_bytes全部文件。消费者结束前不复用slot，G检查所有异步错误。
+
+12.3 快照与完整读取
+外部源复制到orbits后流式SHA+完整验证；复制前后身份/size/mtime变化失败；
+冻结后只绑定快照，原路径之后变化不影响已读快照；快照处理前后hash变化失败。
+源包sort k0、无缺口/重叠/stem冲突，与CLI start/end/step/package一致；ECEF必需、XML几何/身份一致。
+SATC known必需段恰一次、optional最多一次，未知段仍检查范围/CRC/对齐/不重叠；
+header/dir/footer边界、enum、size、stride、t_ns、ns乘加、padding/reserved、每片CRC和尾部无垃圾全部验证。
+非missing状态允许6值全finite或全规范NaN；部分NaN/Inf拒绝，全NaN无manifest解释报unexplained_nan。
+SATNET头/metadata/时间索引/每片CRC/footer/边总数/连续载荷/排序/自环/重复/类型/编号/finite全部验证；
+kind0两星，kind1一星一地面，禁止ground-ground；无向集合重算天线占用。
+info默认先完整格式验证；无源GRAPH_INTEGRITY_OK；有真实SHA+源完整性+成员/网格一致才SOURCE_VERIFIED。
+生产退出码按ErrorCode，测试PASS0/FAIL1/INPUT2/SKIP3，不混淆。
+
+12.4 原子可见性和未来持久化
+每文件.part→完整内容与CRC→flush→close→同文件系统rename；全部必需包完成且摘要后才发布manifest。
+B默认只承诺进程级完整可见，不认证断电安全。中断清.part，已完整包可诊断保留，无成功manifest就是未完整运行。
+F开启持久化：POSIX fsync文件、rename后fsync父目录；Windows FlushFileBuffers文件、同卷原子替换，
+目录持久性受文件系统平台能力，未验证平台明确NOT_TESTED，不扩大保证。
+checkpoint保存run_id/输入摘要/末节点名义状态/全失败集合/下段号；校验一致才从下一段恢复，不重编号。
+测试短写/磁盘满/rename失败/SIGINT/设备故障/重启；仅杀进程不等于已做断电故障测试。
+
+12.5 构建与默认运行验收
+保留第7章基础测试并加：无参数run.py完成60片/10对包及源验证；重复运行独立目录，
+换cwd/空格Unicode路径资源相同；显式坏文件不回退；合法0不替换成默认；无GPU默认CPU正常；
+缺环境具体报错不联网；所有默认与help/manifest一致；JSON坐标/单位/方向/源hash正确；
+F未实现请求明确失败，禁生成伪H/性能/分组仿真报告；新参数未登记默认CI失败。
+B构建顺序仍B0基础→B1配置→B2轨道→B3 SATC→B4网络→B5图绑定→B6部署交付，G另验收。
+发布含本文/源码/run.py/样例/defaults/schema/验证器/测试源/本轮真实日志/源码SHA清单，干净目录解压复测。
+禁止历史包依赖/绝对开发路径/旧对象缓存/伪GPU记录。定义已经完整不意味着软件实现自动PASS。
+
+文档结束。

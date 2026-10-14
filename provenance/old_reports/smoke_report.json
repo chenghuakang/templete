@@ -1,0 +1,319 @@
+{
+  "implementation": "0.1.0-mvp",
+  "requirements_version": "3.4",
+  "platform": "Linux-6.1.155+-x86_64-with-glibc2.43",
+  "compiler": "g++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
+  "compile_flags": "-std=c++17 -O2 -Wall -Wextra -Werror -fopenmp -ffp-contract=off -fno-fast-math",
+  "cmake_build": "BLOCKED: cmake executable absent; direct compiler used solely for validation",
+  "production_runtime": "C++17 + OS API + system libm + optional OpenMP; no Python",
+  "tests": [
+    {
+      "test": "L0-smoke",
+      "status": "PASS",
+      "exit_code": 0,
+      "expected_exit": 0,
+      "seconds": 0.0044,
+      "stdout": "SELFTEST_OK\n",
+      "stderr": ""
+    },
+    {
+      "test": "default-demo-openmp",
+      "status": "PASS",
+      "exit_code": 0,
+      "expected_exit": 0,
+      "seconds": 4.2859,
+      "stdout": "run=/home/user/satpred_testhome/runs/run_000002/orbits SATC_INTEGRITY_OK\nrun=/home/user/satpred_testhome/runs/run_000002 samples=60 packages=10 graphs=10 directed_edges=151800\n{\"directed_edges\":151800,\"implementation_status\":\"MVP_NOT_FULL_V3_4_ACCEPTANCE\",\"numeric_accuracy_certified\":false,\"packages\":10,\"run_id\":\"47456372b3bad2163676623cf52bbd273e381c7d872387209553a974411ec923\",\"slices\":60,\"verified\":true}\n",
+      "stderr": ""
+    },
+    {
+      "test": "default-satread",
+      "status": "PASS",
+      "exit_code": 0,
+      "expected_exit": 0,
+      "seconds": 0.007,
+      "stdout": "{\"M\":6,\"N\":648,\"Ns\":704,\"format\":\"SATC\",\"frame\":0,\"step_ns\":10000000000,\"t0_ns\":1767225600000000000,\"verified\":true}\n",
+      "stderr": ""
+    },
+    {
+      "test": "default-netread",
+      "status": "PASS",
+      "exit_code": 0,
+      "expected_exit": 0,
+      "seconds": 0.0311,
+      "stdout": "{\"M\":6,\"directed_edges\":15180,\"format\":\"SATNET\",\"nodes\":650,\"source_verified\":false,\"verified\":true}\n",
+      "stderr": ""
+    },
+    {
+      "test": "unknown-arg",
+      "status": "PASS",
+      "exit_code": 1,
+      "expected_exit": 1,
+      "seconds": 0.0016,
+      "stdout": "",
+      "stderr": "{\"code\":1,\"name\":\"Arg\",\"where\":\"cli\",\"message\":\"unknown encoding\",\"line\":-1,\"col\":-1}\nArg: unknown encoding\n"
+    },
+    {
+      "test": "duplicate-arg",
+      "status": "PASS",
+      "exit_code": 1,
+      "expected_exit": 1,
+      "seconds": 0.0013,
+      "stdout": "",
+      "stderr": "{\"code\":1,\"name\":\"Arg\",\"where\":\"cli\",\"message\":\"duplicate threads\",\"line\":-1,\"col\":-1}\nArg: duplicate threads\n"
+    },
+    {
+      "test": "exclusive-dump",
+      "status": "PASS",
+      "exit_code": 1,
+      "expected_exit": 1,
+      "seconds": 0.0015,
+      "stdout": "",
+      "stderr": "{\"code\":1,\"name\":\"Arg\",\"where\":\"cli\",\"message\":\"output-only mode exclusive\",\"line\":-1,\"col\":-1}\nArg: output-only mode exclusive\n"
+    },
+    {
+      "test": "bad-explicit-file",
+      "status": "PASS",
+      "exit_code": 3,
+      "expected_exit": 3,
+      "seconds": 0.0015,
+      "stdout": "",
+      "stderr": "{\"code\":3,\"name\":\"Io\",\"where\":\"filesystem\",\"message\":\"filesystem error: cannot get file size: No such file or directory [nonexistent.sbin]\",\"line\":-1,\"col\":-1}\nIo: filesystem error: cannot get file size: No such file or directory [nonexistent.sbin]\n"
+    },
+    {
+      "test": "unsupported-diagnostics",
+      "status": "PASS",
+      "exit_code": 1,
+      "expected_exit": 1,
+      "seconds": 0.0013,
+      "stdout": "",
+      "stderr": "{\"code\":1,\"name\":\"Arg\",\"where\":\"orbit_engine\",\"message\":\"diagnostic protocol appendix D not implemented in this MVP; library propagation is implemented\",\"line\":-1,\"col\":-1}\nArg: diagnostic protocol appendix D not implemented in this MVP; library propagation is implemented\n"
+    },
+    {
+      "test": "cuda-device",
+      "status": "PASS",
+      "exit_code": 6,
+      "expected_exit": 6,
+      "seconds": 0.0013,
+      "stdout": "",
+      "stderr": "{\"code\":6,\"name\":\"Device\",\"where\":\"backend\",\"message\":\"CUDA not implemented/available\",\"line\":-1,\"col\":-1}\nDevice: CUDA not implemented/available\n"
+    },
+    {
+      "test": "zero-step",
+      "status": "PASS",
+      "exit_code": 1,
+      "expected_exit": 1,
+      "seconds": 0.0012,
+      "stdout": "",
+      "stderr": "{\"code\":1,\"name\":\"Arg\",\"where\":\"time\",\"message\":\"invalid duration/step/package\",\"line\":-1,\"col\":-1}\nArg: invalid duration/step/package\n"
+    },
+    {
+      "test": "source-bound-verify",
+      "status": "PASS",
+      "exit_code": 0,
+      "expected_exit": 0,
+      "seconds": 0.0202,
+      "stdout": "SOURCE_VERIFIED\n",
+      "stderr": ""
+    },
+    {
+      "test": "orbit-csv",
+      "status": "PASS",
+      "exit_code": 0,
+      "expected_exit": 0,
+      "seconds": 0.0108,
+      "stdout": "test_orbit.csv\n",
+      "stderr": ""
+    },
+    {
+      "test": "graph-csv",
+      "status": "PASS",
+      "exit_code": 0,
+      "expected_exit": 0,
+      "seconds": 0.0279,
+      "stdout": "test_graph.csv\n",
+      "stderr": ""
+    },
+    {
+      "test": "corrupt-header",
+      "status": "PASS",
+      "exit_code": 7,
+      "expected_exit": 7,
+      "seconds": 0.0017,
+      "stdout": "",
+      "stderr": "{\"code\":7,\"name\":\"Integrity\",\"where\":\"SATC\",\"message\":\"header\",\"line\":-1,\"col\":-1}\nIntegrity: header\n"
+    },
+    {
+      "test": "faults-13-slices",
+      "status": "PASS",
+      "exit_code": 0,
+      "expected_exit": 0,
+      "seconds": 0.004,
+      "stdout": "run=/home/user/faults_out SATC_INTEGRITY_OK\n",
+      "stderr": ""
+    },
+    {
+      "test": "verify-pred_000000.sbin",
+      "status": "PASS",
+      "exit_code": 0,
+      "expected_exit": 0,
+      "seconds": 0.0015,
+      "stdout": "SATC_INTEGRITY_OK\n",
+      "stderr": ""
+    },
+    {
+      "test": "verify-pred_000001.sbin",
+      "status": "PASS",
+      "exit_code": 0,
+      "expected_exit": 0,
+      "seconds": 0.0015,
+      "stdout": "SATC_INTEGRITY_OK\n",
+      "stderr": ""
+    },
+    {
+      "test": "verify-pred_000002.sbin",
+      "status": "PASS",
+      "exit_code": 0,
+      "expected_exit": 0,
+      "seconds": 0.0013,
+      "stdout": "SATC_INTEGRITY_OK\n",
+      "stderr": ""
+    },
+    {
+      "test": "knn-small",
+      "status": "PASS",
+      "exit_code": 0,
+      "expected_exit": 0,
+      "seconds": 0.0115,
+      "stdout": "run=/home/user/knn_out/orbits SATC_INTEGRITY_OK\nrun=/home/user/knn_out samples=13 packages=3 graphs=3 directed_edges=16\n",
+      "stderr": ""
+    },
+    {
+      "test": "memory-budget-reject",
+      "status": "PASS",
+      "exit_code": 2,
+      "expected_exit": 2,
+      "seconds": 0.0034,
+      "stdout": "",
+      "stderr": "{\"code\":2,\"name\":\"Config\",\"where\":\"memory\",\"message\":\"MVP uses package buffer; shorten package or increase budget\",\"line\":-1,\"col\":-1}\nConfig: MVP uses package buffer; shorten package or increase budget\n"
+    },
+    {
+      "test": "reuse-default-orbit",
+      "status": "PASS",
+      "exit_code": 0,
+      "expected_exit": 0,
+      "seconds": 3.8425,
+      "stdout": "run=/home/user/reuse_out samples=60 packages=10 graphs=10 directed_edges=151800\n",
+      "stderr": ""
+    },
+    {
+      "test": "independent-struct-crc-sha-knn-faults",
+      "status": "PASS",
+      "stdout": "{\"status\": \"PASS\", \"slices\": 13, \"packages\": 3, \"directed_edges\": 16}\n",
+      "stderr": ""
+    },
+    {
+      "test": "independent-default-first-package",
+      "status": "PASS",
+      "N": 648,
+      "M": 6,
+      "directed_edges": 15180
+    },
+    {
+      "test": "threads1-batch1",
+      "status": "PASS",
+      "exit_code": 0,
+      "expected_exit": 0,
+      "seconds": 0.0043,
+      "stdout": "run=/home/user/batch1_out SATC_INTEGRITY_OK\n",
+      "stderr": ""
+    },
+    {
+      "test": "threads2-batch7",
+      "status": "PASS",
+      "exit_code": 0,
+      "expected_exit": 0,
+      "seconds": 0.0039,
+      "stdout": "run=/home/user/batch7_out SATC_INTEGRITY_OK\n",
+      "stderr": ""
+    },
+    {
+      "test": "threads-batch-TIME_INDEX-tensor-invariance",
+      "status": "PASS",
+      "note": "batch option currently does not change buffer planner; only thread scheduling differs"
+    },
+    {
+      "test": "final-source-default-demo",
+      "status": "PASS",
+      "exit_code": 0,
+      "expected_exit": 0,
+      "seconds": 4.3067,
+      "stdout": "run=/home/user/satpred_testhome/runs/run_000003/orbits SATC_INTEGRITY_OK\nrun=/home/user/satpred_testhome/runs/run_000003 samples=60 packages=10 graphs=10 directed_edges=151800\n{\"directed_edges\":151800,\"implementation_status\":\"MVP_NOT_FULL_V3_4_ACCEPTANCE\",\"numeric_accuracy_certified\":false,\"packages\":10,\"run_id\":\"47456372b3bad2163676623cf52bbd273e381c7d872387209553a974411ec923\",\"slices\":60,\"verified\":true}\n",
+      "stderr": ""
+    },
+    {
+      "test": "permanent-missing-nominal-success-zero-edges",
+      "status": "PASS",
+      "exit_code": 0,
+      "expected_exit": 0,
+      "seconds": 0.0064,
+      "stdout": "run=/home/user/missing_out/orbits SATC_INTEGRITY_OK\nrun=/home/user/missing_out samples=1 packages=1 graphs=1 directed_edges=0\n",
+      "stderr": ""
+    },
+    {
+      "test": "independent-zero-edge-format",
+      "status": "PASS",
+      "stdout": "{\"status\": \"PASS\", \"slices\": 1, \"packages\": 1, \"directed_edges\": 0}\n",
+      "stderr": ""
+    },
+    {
+      "test": "independent-no-sample-short-event-preserved",
+      "status": "PASS",
+      "events": [
+        [
+          2,
+          2,
+          1767225601000000000,
+          1767225602000000000
+        ],
+        [
+          3,
+          2,
+          1767225620000000000,
+          1767225640000000000
+        ]
+      ]
+    }
+  ],
+  "not_tested": [
+    "L1 precision thresholds/SciPy/ERFA reference",
+    "Windows/MSVC deployment",
+    "fuzz/sanitizers and hostile size coverage",
+    "SIGINT/child process races",
+    "strict all-allocation memory accounting",
+    "appendix D diagnostic protocol",
+    "normative canonical run_id/golden vectors",
+    "full schemas and all default registry requirements"
+  ],
+  "source_sha256": {
+    "README.md": "2393e1a133c0c80dcaf4b7cacd581841f75a9667a7e84c7c10b8193d4f753e43",
+    "build.sh": "f2b07aa2fa8d019f1a5541ee988a1ed1aa32f71cd19db08957ff3491eaef80c4",
+    "CMakeLists.txt": "3ed38b66b4a02cfe985ff9068568b649d957dec0db5ba87b0832d8f22725a7bd",
+    "build.ps1": "a8848b796bab7c96a6289977f57e7ae9392ed48ffe9080b83cbd3396b229d637",
+    "tests/regression.py": "2da3290a7488687cda788c58e7829e77be2f6d82d645be3587f47aca306c7660",
+    "tests/independent_format.py": "e8b4e2a06aa826a21122b810081f9e1ed8b0b4715d7c2700424073cfc2ebb331",
+    "src/core.cpp": "d37bf754db89d3580a89e5f62d0e978d0b9fe5a27319c05b140a759fa9c6d4b6",
+    "include/core.hpp": "5cd19fad5f363b16c87f872cd8c5efc43d984894758e1c76af76805d363d1ef7",
+    "include/rk8.hpp": "2ee9dbb59d461994b8029af210f04c6620acb67e892dc300f754b694ef329b50",
+    "docs/IMPLEMENTATION_STATUS.md": "fc09f2a5cd18982e944ff5100b17978049e5837750a777e2dd19512e38a52b6b",
+    "docs/requirements_v3.4.txt": "270a34865024fdb036e70503a4ed8f98702b366ed670073b7c2b31faf78d4a4a",
+    "examples/nodes.xml": "afc01d00b7a2b8a09e8f772e8b298f07898ed262598eef115c6a4145efd2d78f",
+    "examples/satellites.xml": "7cad4d320700ea258362419da40e4a252b3077d83081601108e92c7fbc6adba7",
+    "examples/settings.json": "c3616980efb5ea4790d0b64c252136eb83a8246e488abee4fe69ecd0c3da2909",
+    "apps/main.cpp": "cf7874f6ed6bef22f978082e11f42b797c816b6754fd6398eb527a5b94c954ff"
+  },
+  "reproducible_regression_script": {
+    "status": "PASS",
+    "stdout": "{\"status\": \"PASS\", \"summary\": {\"directed_edges\": 151800, \"implementation_status\": \"MVP_NOT_FULL_V3_4_ACCEPTANCE\", \"numeric_accuracy_certified\": false, \"packages\": 10, \"run_id\": \"47456372b3bad2163676623cf52bbd273e381c7d872387209553a974411ec923\", \"slices\": 60, \"verified\": true}}\n",
+    "stderr": ""
+  }
+}

@@ -1,0 +1,1029 @@
+{
+ "censored": false,
+ "dst": 50,
+ "finished_ns": 1767242190537474558,
+ "format": "hsn-traceroute-text-v1",
+ "issued_ns": 1767241770000000000,
+ "model": "ttl-hop-icmp-directed-return-no-queue-v1",
+ "reached": true,
+ "rows": [
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241775000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241770000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241780000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241775000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241785000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241780000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 1
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241790000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241785000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241795000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241790000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241800000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241795000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 2
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241805000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241800000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241810000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241805000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241815000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241810000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 3
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241820000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241815000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241825000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241820000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241830000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241825000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 4
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241835000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241830000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241840000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241835000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241845000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241840000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 5
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241850000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241845000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241855000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241850000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241860000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241855000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 6
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241865000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241860000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241870000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241865000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241875000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241870000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 7
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241880000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241875000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241885000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241880000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241890000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241885000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 8
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241895000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241890000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241900000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241895000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241905000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241900000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 9
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241910000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241905000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241915000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241910000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241920000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241915000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 10
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241925000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241920000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241930000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241925000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241935000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241930000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 11
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241940000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241935000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241945000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241940000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241950000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241945000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 12
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241955000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241950000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241960000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241955000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241965000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241960000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 13
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241970000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241965000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241975000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241970000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241980000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241975000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 14
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241985000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241980000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241990000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241985000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767241995000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241990000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 15
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242000000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767241995000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242005000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242000000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242010000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242005000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 16
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242015000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242010000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242020000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242015000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242025000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242020000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 17
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242030000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242025000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242035000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242030000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242040000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242035000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 18
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242045000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242040000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242050000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242045000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242055000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242050000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 19
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242060000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242055000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242065000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242060000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242070000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242065000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 20
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242075000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242070000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242080000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242075000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242085000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242080000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 21
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242090000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242085000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242095000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242090000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242100000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242095000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 22
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242105000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242100000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242110000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242105000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242115000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242110000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 23
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242120000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242115000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242125000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242120000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242130000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242125000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 24
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242135000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242130000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242140000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242135000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242145000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242140000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 25
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242150000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242145000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242155000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242150000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242160000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242155000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 26
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242165000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242160000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242170000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242165000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242175000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242170000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 27
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242180000000000,
+     "index": 0,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242175000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242185000000000,
+     "index": 1,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242180000000000,
+     "status": "timeout"
+    },
+    {
+     "destination_reply": false,
+     "detail": "forward_unreachable",
+     "finished_ns": 1767242190000000000,
+     "index": 2,
+     "responder": null,
+     "rtt_ns": null,
+     "sent_ns": 1767242185000000000,
+     "status": "timeout"
+    }
+   ],
+   "ttl": 28
+  },
+  {
+   "probes": [
+    {
+     "destination_reply": true,
+     "detail": "icmp_port_unreachable",
+     "finished_ns": 1767242190179158186,
+     "index": 0,
+     "responder": 50,
+     "rtt_ns": 179158186,
+     "sent_ns": 1767242190000000000,
+     "status": "reply"
+    },
+    {
+     "destination_reply": true,
+     "detail": "icmp_port_unreachable",
+     "finished_ns": 1767242190358316372,
+     "index": 1,
+     "responder": 50,
+     "rtt_ns": 179158186,
+     "sent_ns": 1767242190179158186,
+     "status": "reply"
+    },
+    {
+     "destination_reply": true,
+     "detail": "icmp_port_unreachable",
+     "finished_ns": 1767242190537474558,
+     "index": 2,
+     "responder": 50,
+     "rtt_ns": 179158186,
+     "sent_ns": 1767242190358316372,
+     "status": "reply"
+    }
+   ],
+   "ttl": 29
+  }
+ ],
+ "src": 49,
+ "trace_id": 34,
+ "verification": "SOURCE_VERIFIED"
+}
