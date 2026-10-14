@@ -42,5 +42,8 @@ if(UNIFIED_TESTS)
   set_tests_properties(default_flow_clean_env PROPERTIES TIMEOUT 1800)
   add_test(NAME upstream_regression COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/satpred/tests/regression.py $<TARGET_FILE_DIR:hypersim>)
   set_tests_properties(upstream_regression PROPERTIES TIMEOUT 900)
+   add_test(NAME startup_jitter COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/startup_jitter.py $<TARGET_FILE_DIR:hypersim> ${CMAKE_BINARY_DIR}/test_runs)
+   set_tests_properties(startup_jitter PROPERTIES TIMEOUT 900)
+
  endif()
 endif()

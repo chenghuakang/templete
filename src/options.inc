@@ -109,6 +109,7 @@ namespace unified {
         need(val(o,"satellite-processing-us")<=1000000,1,"processing","satellite processing range (0..1000000 us)");
         duration(o,"trace-retry-interval-s");
         need(val(o,"trace-retry-max")<=1000000,1,"trace retry","range (0..1000000)");
+        need(o.v.at("tool-start-jitter")=="disabled"||o.v.at("tool-start-jitter")=="enabled",1,"tool start jitter","disabled|enabled");
         need(o.v.at("probe-serialization")=="enabled"||o.v.at("probe-serialization")=="disabled",1,"probe serialization","enabled|disabled");
         need(val(o,"memory-budget-bytes")>=16777216,1,"budget","minimum 16 MiB");
         need(val(o,"host-io-delay-ms")<=10000,1,"test delay","range");

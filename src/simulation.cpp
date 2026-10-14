@@ -73,6 +73,15 @@ namespace unified {
         }
         return best+1;
     }
+    // Startup jitter (SDD startup-time-error model): the three tools are not started at
+    // nanosecond-precise simultaneity. When enabled, each tool receives an independent random
+    // 0..5 s offset derived from the system clock (nanosecond resolution).
+    U tool_start_offset_ns(unsigned tool){
+        U x=U(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+        x+=0x9e3779b97f4a7c15ULL*(tool+1);
+        x^=x>>30;x*=0xbf58476d1ce4e5b9ULL;x^=x>>27;x*=0x94d049bb133111ebULL;x^=x>>31;
+        return x%5000000001ULL;   // 0..5 s inclusive
+    }
     class Simulation{
         Options opts;
         Topology&input;
@@ -95,6 +104,8 @@ namespace unified {
         U bottleneck=0,path_delay=0;
         long double generated_bits=0,delivered_bits=0,unserved_bits=0,arrival_rate=0,report_generated=0,report_delivered=0,report_unserved=0;
         U measured_latency_ns=0,measured_latency_count=0;
+        U start_offset_business_ns=0,start_offset_trace_ns=0,start_offset_stats_ns=0;
+        I flow_start_ns=0;
         U generated_packets=0,delivered_packets=0,dropped_packets=0,queue_drop=0,link_drop=0,no_route_drop=0,hop_drop=0,inflight=0;
         bool tracing=false;
         U trace_count=0,trace_reached=0,retry_remaining=0,trace_retries=0;
@@ -311,7 +322,7 @@ namespace unified {
                 a.kind=EventKind::FlowBegin;
                 a.phase=EventPhase::Completion;
                 a.rate=static_cast<long double>(rate);
-                a.time=later(path_delay);
+                a.time=std::max(later(path_delay),flow_start_ns);
                 schedule(a);
                 a.kind=EventKind::FlowEnd;
                 need(path_delay<=U(INT64_MAX-next_topology),7,"time","fluid arrival overflow");
@@ -321,7 +332,9 @@ namespace unified {
         }
         void integrate(I to){
             if(!packet_mode&&src!=UINT64_MAX&&dst!=UINT64_MAX){
-                long double dt=static_cast<long double>(to-now)/1e9L;
+                // Startup jitter: nothing is generated before the business tool has started.
+                I from=std::max(now,flow_start_ns);
+                long double dt=to>from?static_cast<long double>(to-from)/1e9L:0.0L;
                 generated_bits+=offer*dt;
                 delivered_bits+=arrival_rate*dt;
                 unserved_bits+=(offer-std::min(offer,bottleneck))*dt;
@@ -587,6 +600,17 @@ namespace unified {
             iperf_json.open(out/(names.file("iperf","json")+".part"),std::ios::binary);
             need(bool(business)&&bool(stats)&&bool(trace_text)&&bool(trace_json)&&bool(iperf_json),3,"output","cannot open outputs");
             next_report=later(U(duration(opts,"report-interval-s")));
+            // Startup jitter: when enabled, each tool's first activity is delayed by its own
+            // system-clock-derived 0..5 s offset. Disabled (default) leaves the schedule untouched.
+            if(opts.v.at("tool-start-jitter")=="enabled"){
+                start_offset_business_ns=tool_start_offset_ns(0);
+                start_offset_trace_ns=tool_start_offset_ns(1);
+                start_offset_stats_ns=tool_start_offset_ns(2);
+            }
+            flow_start_ns=begin+I(start_offset_business_ns);
+            next_probe=begin+I(start_offset_trace_ns);
+            next_report+=I(start_offset_stats_ns);
+            report_begin=begin+I(start_offset_stats_ns);
         }
         J run(){
             activate();
@@ -603,12 +627,13 @@ namespace unified {
                 log("flow_start",p);
                 if(packet_mode){
                     Event e;
-                    e.time=now;
+                    e.time=std::max(now,flow_start_ns);
                     e.kind=EventKind::Generate;
                     e.phase=EventPhase::Traffic;
                     schedule(e);
                 }
-                begin_trace();
+                // Startup jitter: the first traceroute round waits for begin+offset_traceroute.
+                if(next_probe<=now)begin_trace();
             }
             while(now<end){
                 safe();
@@ -690,6 +715,7 @@ namespace unified {
             r["completed_traceroutes"]=trace_count;
             r["reached_traceroutes"]=trace_reached;
             r["traceroute_retries"]=trace_retries;
+            {J off=J::obj();off["business"]=start_offset_business_ns;off["traceroute"]=start_offset_trace_ns;off["statistics"]=start_offset_stats_ns;r["tool_start_offsets_ns"]=off;}
             r["handover_policy"]=input.plan?policy_name(input.plan->config().policy):"none";
             if(input.plan){
                 r["handover_events"]=handover_events;
