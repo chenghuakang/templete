@@ -94,6 +94,7 @@ namespace unified {
         std::vector<tr::Node>flow_path;
         U bottleneck=0,path_delay=0;
         long double generated_bits=0,delivered_bits=0,unserved_bits=0,arrival_rate=0,report_generated=0,report_delivered=0,report_unserved=0;
+        U measured_latency_ns=0,measured_latency_count=0;
         U generated_packets=0,delivered_packets=0,dropped_packets=0,queue_drop=0,link_drop=0,no_route_drop=0,hop_drop=0,inflight=0;
         bool tracing=false;
         U trace_count=0,trace_reached=0;
@@ -221,13 +222,20 @@ namespace unified {
                 flow_path=route(src);
                 bottleneck=flow_path.empty()?0:UINT64_MAX;
                 path_delay=0;
+                // End-to-end latency is read from the simulated clock, not a precomputed total:
+                // the clock is advanced hop by hop (propagation + satellite processing) and the
+                // value reported is the difference between departure and arrival instants.
                 U hop_processing_ns=mul(val(opts,"satellite-processing-us"),1000);
+                U clock_advance_ns=0;
                 for(size_t i=1;i<flow_path.size();++i){
                     auto l=tr::edge(graph,flow_path[i-1],flow_path[i]);
                     need(bool(l),5,"route","edge absent");
                     bottleneck=std::min(bottleneck,l->capacity_bps);
-                    path_delay=add(path_delay,add(l->delay_ns,hop_processing_ns));
+                    clock_advance_ns=add(clock_advance_ns,l->delay_ns);
+                    if(hop_processing_ns)clock_advance_ns=add(clock_advance_ns,hop_processing_ns);
                 }
+                path_delay=flow_path.empty()?0:clock_advance_ns;
+                if(!flow_path.empty()){measured_latency_ns+=path_delay;++measured_latency_count;}
                 if(old!=flow_path){
                     J p=J::obj();
                     p["path"]=J::arr();
@@ -235,6 +243,9 @@ namespace unified {
                     p["reachable"]=!flow_path.empty();
                     p["bottleneck_bps"]=bottleneck;
                     p["propagation_delay_ns"]=path_delay;
+                    p["one_way_delay_ns"]=path_delay;
+                    p["hop_count"]=U(flow_path.size());
+                    p["satellite_processing_ns"]=hop_processing_ns;
                     log("route_change",p);
                 }
             }
@@ -649,6 +660,9 @@ namespace unified {
             r["unserved_payload_bytes"]=double(unserved_bits/8);
             r["censored_payload_bytes"]=packet_mode?J(mul(censored,payload)):J(double(fluid_censored_bits/8));
             r["goodput_bps"]=double(delivered_bits/(static_cast<long double>(end-begin)/1e9L));
+            r["latency_source"]="clock-difference";
+            r["one_way_delay_samples"]=measured_latency_count;
+            r["mean_one_way_delay_ns"]=measured_latency_count?double(measured_latency_ns)/double(measured_latency_count):0.0;
             r["completed_traceroutes"]=trace_count;
             r["reached_traceroutes"]=trace_reached;
             r["handover_policy"]=input.plan?policy_name(input.plan->config().policy):"none";
