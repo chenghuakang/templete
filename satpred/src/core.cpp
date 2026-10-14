@@ -964,6 +964,12 @@ double mass=260,drag=10,cd=2.2,srp=10,cr=1.3;
 std::string source="placeholder",reference;
 }
 ;
+struct PhysOv{
+bool mass=false,drag=false,cd=false,srp=false,cr=false,source=false,reference=false;
+double mass_v=0,drag_v=0,cd_v=0,srp_v=0,cr_v=0;
+std::string source_v,reference_v;
+}
+;
 void radio(const X&x,Radio&r){
 keys(x,"uplink_bps downlink_bps antennas");
 r.up=xu(x,"uplink_bps",r.up);
@@ -1027,11 +1033,12 @@ need(s.a<=1e9&&s.e>=0&&s.e<1&&s.inc>=0&&s.inc<=pi&&s.a*(1-s.e)>=RE+120000,2,"orb
 }
 struct Config{
 std::vector<Sat>s;
+std::vector<uint32_t> physNotUsed;
 B geometry,config;
 std::string xml;
 }
 ;
-Config constellation(const fs::path&p,I start,I end,bool exm,bool exd){
+Config constellation(const fs::path&p,I start,I end,bool exm,bool exd,const std::map<uint32_t,PhysOv>*po=nullptr){
 Config cfg;
 cfg.xml=readtext(p);
 cfg.config=sha(cfg.xml);
@@ -1078,6 +1085,7 @@ geom.insert(geom.end(),magic.begin(),magic.end());
 geom.push_back(0);
 append(geom,ls.size(),4);
 U gid=0;
+std::set<uint32_t> physSeen;
 for(auto&l:ls){
 keys(l,"id pattern P S F");
 auto pat=attr(l,"pattern","star");
@@ -1232,11 +1240,31 @@ std::ostringstream n;
 n<<'L'<<s.layer<<"-P"<<std::setfill('0')<<std::setw(2)<<s.plane<<"-S"<<std::setw(3)<<s.slot;
 s.name=cut(s.explicitname.empty()?n.str():s.explicitname,24);
 s.y=kepler(s.a,s.e,s.inc,s.om,s.u,s.w);
-if((s.base==2&&exm)||(s.base==1&&exd))continue;
+physSeen.insert(s.gid);
+bool poUsed=false;
+if(po){
+auto it=po->find(s.gid);
+if(it!=po->end()){
+auto&o=it->second;
+if(o.mass)s.phys.mass=o.mass_v;
+if(o.drag)s.phys.drag=o.drag_v;
+if(o.cd)s.phys.cd=o.cd_v;
+if(o.srp)s.phys.srp=o.srp_v;
+if(o.cr)s.phys.cr=o.cr_v;
+if(o.source)s.phys.source=o.source_v;
+if(o.reference)s.phys.reference=o.reference_v;
+need(s.phys.mass>0&&s.phys.drag>=0&&s.phys.cd>=0&&s.phys.srp>=0&&s.phys.cr>=0&&(s.phys.source=="placeholder"||s.phys.source=="documented")&&(s.phys.source!="documented"||!s.phys.reference.empty()),2,"phys_json","invalid physical parameters");
+poUsed=true;
+}
+}
+bool excluded=(s.base==2&&exm)||(s.base==1&&exd);
+if(poUsed&&excluded)cfg.physNotUsed.push_back(s.gid);
+if(excluded)continue;
 cfg.s.push_back(s);
 }
 gid+=P*S;
 }
+if(po)for(auto&kv:*po)need(physSeen.count(kv.first),2,"phys_json","gid "+std::to_string(kv.first)+" is not a nominal member");
 need(!cfg.s.empty(),2,"catalog","all members excluded");
 cfg.geometry=sha(geom);
 return cfg;
@@ -1314,8 +1342,49 @@ struct Settings{
 bool drag=true,third=true,srp=true,rel=true;
 double scale=1,dut=0,xp=0,yp=0,tt=69.184,j2=1.08262617385222e-3,j3=-2.53241051856772e-6,j4=-1.61989759991697e-6;
 std::string raw;
+std::vector<I> eopT,ephT,denT;
+std::vector<std::array<double,4>> eopV;
+std::vector<std::array<double,6>> ephV;
+std::vector<double> denV;
+std::map<uint32_t,PhysOv> phys;
+struct Ext{std::string role,sha;U size;};
+std::vector<Ext> ext;
 }
 ;
+std::vector<std::string> csvsplit(const std::string&line){
+std::vector<std::string> v;
+size_t i=0;
+for(;;){
+size_t e=line.find(',',i);
+if(e==std::string::npos){v.push_back(line.substr(i));break;}
+v.push_back(line.substr(i,e-i));
+i=e+1;
+}
+return v;
+}
+std::vector<std::vector<std::string>> csvrows(const std::string&raw,const std::string&role,const std::string&cols){
+size_t i=0;
+if(raw.size()>=3&&uint8_t(raw[0])==0xEF&&uint8_t(raw[1])==0xBB&&uint8_t(raw[2])==0xBF)i=3;
+std::vector<std::vector<std::string>> rows;
+while(i<raw.size()){
+size_t e=raw.find('\n',i);
+if(e==std::string::npos)e=raw.size();
+std::string line=raw.substr(i,e-i);
+if(!line.empty()&&line.back()=='\r')line.pop_back();
+need(!line.empty(),2,role,"empty row/comment not allowed");
+rows.push_back(csvsplit(line));
+i=e+1;
+}
+need(rows.size()>=3,2,role,"need header and >=2 data rows");
+need(rows[0]==csvsplit(cols),2,role,"unexpected column names");
+return rows;
+}
+std::string extread(const fs::path&p,const std::string&role,Settings&s){
+std::string raw=readtext(p);
+B b(raw.begin(),raw.end());
+s.ext.push_back({role,hex(sha(b)),U(b.size())});
+return raw;
+}
 Settings settings(const fs::path&p){
 Settings s;
 if(p=="none")return s;
@@ -1335,7 +1404,7 @@ else if(k=="xp_arcsec")s.xp=v.real();
 else if(k=="yp_arcsec")s.yp=v.real();
 else if(k=="tt_minus_utc_s")s.tt=v.real();
 else if(k=="gravity_json"){
-auto q=json(readtext(p.parent_path()/fs::u8path(v.str())));
+auto q=json(extread(p.parent_path()/fs::u8path(v.str()),"gravity",s));
 need(q.o.size()==1&&q.o.count("J"),2,"gravity","J only");
 for(auto&a:q.at("J").o){
 if(a.first=="2")s.j2=a.second.real();
@@ -1344,19 +1413,108 @@ else if(a.first=="4")s.j4=a.second.real();
 else fail(2,"gravity","order");
 }
 }
-else if(k=="eop_csv"||k=="ephemeris_csv"||k=="density_csv"||k=="phys_json")fail(1,"settings",k+" not implemented in this MVP");
+else if(k=="eop_csv"){
+auto rows=csvrows(extread(p.parent_path()/fs::u8path(v.str()),"eop",s),"eop","utc_seconds,dut1_s,xp_arcsec,yp_arcsec,tt_minus_utc_s");
+for(size_t i=1;i<rows.size();++i){
+need(rows[i].size()==5,2,"eop","column count");
+I t=seconds(rows[i][0]);
+std::array<double,4> a{real(rows[i][1]),real(rows[i][2]),real(rows[i][3]),real(rows[i][4])};
+need(s.eopT.empty()||t>s.eopT.back(),2,"eop","utc_seconds not strictly increasing");
+s.eopT.push_back(t);s.eopV.push_back(a);
+}
+}
+else if(k=="ephemeris_csv"){
+auto rows=csvrows(extread(p.parent_path()/fs::u8path(v.str()),"ephemeris",s),"ephemeris","utc_seconds,sun_x,sun_y,sun_z,moon_x,moon_y,moon_z");
+for(size_t i=1;i<rows.size();++i){
+need(rows[i].size()==7,2,"ephemeris","column count");
+I t=seconds(rows[i][0]);
+std::array<double,6> a;
+for(int c=0;c<6;++c)a[size_t(c)]=real(rows[i][size_t(c)+1]);
+need(s.ephT.empty()||t>s.ephT.back(),2,"ephemeris","utc_seconds not strictly increasing");
+s.ephT.push_back(t);s.ephV.push_back(a);
+}
+}
+else if(k=="density_csv"){
+auto rows=csvrows(extread(p.parent_path()/fs::u8path(v.str()),"density",s),"density","utc_seconds,rho_kg_m3");
+for(size_t i=1;i<rows.size();++i){
+need(rows[i].size()==2,2,"density","column count");
+I t=seconds(rows[i][0]);
+double rho=real(rows[i][1]);
+need(rho>=0,2,"density","negative rho");
+need(s.denT.empty()||t>s.denT.back(),2,"density","utc_seconds not strictly increasing");
+s.denT.push_back(t);s.denV.push_back(rho);
+}
+}
+else if(k=="phys_json"){
+J q=json(extread(p.parent_path()/fs::u8path(v.str()),"phys",s));
+need(q.type==J::Obj,2,"phys_json","object");
+for(auto&e:q.o){
+need(e.second.type==J::Obj&&!e.second.o.empty(),2,"phys_json","empty or non-object slot");
+U gid=uint(e.first);
+need(gid<=UINT32_MAX&&std::to_string(gid)==e.first,2,"phys_json","gid key");
+PhysOv o;
+for(auto&a:e.second.o){
+auto&kk=a.first;auto&vv=a.second;
+if(kk=="mass_kg"){o.mass=true;o.mass_v=vv.real();}
+else if(kk=="drag_area_m2"){o.drag=true;o.drag_v=vv.real();}
+else if(kk=="cd"){o.cd=true;o.cd_v=vv.real();}
+else if(kk=="srp_area_m2"){o.srp=true;o.srp_v=vv.real();}
+else if(kk=="cr"){o.cr=true;o.cr_v=vv.real();}
+else if(kk=="source"){o.source=true;o.source_v=vv.str();}
+else if(kk=="reference"){o.reference=true;o.reference_v=vv.str();}
+else fail(2,"phys_json","unknown key "+kk);
+}
+need(!s.phys.count(uint32_t(gid)),2,"phys_json","duplicate gid");
+s.phys[uint32_t(gid)]=o;
+}
+}
 else fail(2,"settings","unknown "+k);
 }
 need(s.scale>=0,2,"settings","negative density");
 return s;
 }
+std::array<double,4> eopAt(const Settings&s,double U){
+if(s.eopT.empty())return{s.dut,s.xp,s.yp,s.tt};
+double x=U*1e9;
+need(x>=double(s.eopT.front())&&x<=double(s.eopT.back()),2,"eop_csv","evaluation time outside EOP table (no extrapolation)");
+size_t k=0;
+while(k+1<s.eopT.size()&&double(s.eopT[k+1])<=x)++k;
+std::array<double,4> z=s.eopV[k];
+if(k+1<s.eopT.size()){
+double f=(x-double(s.eopT[k]))/(double(s.eopT[k+1])-double(s.eopT[k]));
+for(int i=0;i<4;++i)z[size_t(i)]+=(s.eopV[k+1][size_t(i)]-s.eopV[k][size_t(i)])*f;
+}
+return z;
+}
+std::pair<V,V> ephAt(const Settings&s,double U){
+double x=U*1e9;
+need(x>=double(s.ephT.front())&&x<=double(s.ephT.back()),2,"ephemeris_csv","evaluation time outside ephemeris table (no extrapolation)");
+size_t k=0;
+while(k+1<s.ephT.size()&&double(s.ephT[k+1])<=x)++k;
+std::array<double,6> z=s.ephV[k];
+if(k+1<s.ephT.size()){
+double f=(x-double(s.ephT[k]))/(double(s.ephT[k+1])-double(s.ephT[k]));
+for(int i=0;i<6;++i)z[size_t(i)]+=(s.ephV[k+1][size_t(i)]-s.ephV[k][size_t(i)])*f;
+}
+return{V{z[0],z[1],z[2]},V{z[3],z[4],z[5]}};
+}
+double denAt(const Settings&s,double U){
+double x=U*1e9;
+need(x>=double(s.denT.front())&&x<=double(s.denT.back()),2,"density_csv","evaluation time outside density table (no extrapolation)");
+size_t k=0;
+while(k+1<s.denT.size()&&double(s.denT[k+1])<=x)++k;
+if(k+1>=s.denT.size())return s.denV.back();
+double f=(x-double(s.denT[k]))/(double(s.denT[k+1])-double(s.denT[k]));
+return s.denV[k]+(s.denV[k+1]-s.denV[k])*f;
+}
 Mat precession(double U,const Settings&s){
-double T=(U+s.tt-946728000)/(36525.0*86400),arc=pi/648000;
+double T=(U+eopAt(s,U)[3]-946728000)/(36525.0*86400),arc=pi/648000;
 return rz((2306.2181*T+1.09468*T*T+.018203*T*T*T)*arc)*ry(-(2004.3109*T-.42665*T*T-.041833*T*T*T)*arc)*rz((2306.2181*T+.30188*T*T+.017998*T*T*T)*arc);
 }
 Mat rotation(double U,const Settings&s){
-double d=(U+s.dut-946728000)/86400,T=d/36525,gm=(280.46061837+360.98564736629*d+.000387933*T*T-T*T*T/38710000)*pi/180;
-return ry(s.xp*pi/648000)*rx(s.yp*pi/648000)*rz(-wrap(gm))*precession(U,s);
+auto e=eopAt(s,U);
+double d=(U+e[0]-946728000)/86400,T=d/36525,gm=(280.46061837+360.98564736629*d+.000387933*T*T-T*T*T/38710000)*pi/180;
+return ry(e[1]*pi/648000)*rx(e[2]*pi/648000)*rz(-wrap(gm))*precession(U,s);
 }
 V ellipse(double a,double e,double M){
 M=wrap(M);
@@ -1372,6 +1530,7 @@ a*(std::cos(E)-e),a*std::sqrt(1-e*e)*std::sin(E),0}
 ;
 }
 std::pair<V,V>sunmoon(double U,const Settings&s){
+if(!s.ephT.empty())return ephAt(s,U);
 double d=(U-946598400)/86400,deg=pi/180,ws=(282.9404+4.70935e-5*d)*deg,Ms=wrap((356.0470+.9856002585*d)*deg);
 V sun=rz(ws)*ellipse(AU,.016709-1.151e-9*d,Ms);
 double om=(125.1228-.0529538083*d)*deg,i=5.1454*deg,w=(318.0634+.1643573223*d)*deg,M=wrap((115.3654+13.0649929509*d)*deg);
@@ -1393,6 +1552,7 @@ Q*sun,Q*moon}
 struct Env{
 Mat R,D;
 V sun,moon;
+double rho=-1;
 }
 ;
 struct Environment{
@@ -1411,6 +1571,7 @@ for(int i=0;i<9;++i)e.D.a[i]=p.a[i]-m.a[i];
 auto sm=sunmoon(U,s);
 e.sun=sm.first;
 e.moon=sm.second;
+e.rho=s.denT.empty()?-1.0:denAt(s,U);
 return e;
 }
 Env at(double rel)const{
@@ -1429,6 +1590,7 @@ e.D.a[k]=a.D.a[k]+f*(b.D.a[k]-a.D.a[k]);
 }
 e.sun=a.sun+(b.sun-a.sun)*f;
 e.moon=a.moon+(b.moon-a.moon)*f;
+e.rho=a.rho+f*(b.rho-a.rho);
 return e;
 }
 }
@@ -1475,7 +1637,8 @@ a=a+third(e.sun,1.32712440018e20)+third(e.moon,4.902800066e12);
 if(s.rel)a=a+(r*(4*mu/n-dot(v,v))+v*(4*dot(r,v)))*(mu/(299792458.0*299792458.0*n*n*n));
 if(s.drag){
 V vr=e.R*v+e.D*r;
-a=a+e.R.tr()*(vr*(-.5*density(n-RE)*s.scale*p.cd*p.drag/p.mass*norm(vr)));
+double rho=e.rho>=0?e.rho:density(n-RE);
+a=a+e.R.tr()*(vr*(-.5*rho*s.scale*p.cd*p.drag/p.mass*norm(vr)));
 }
 if(s.srp){
 V u=e.sun*(1/norm(e.sun));
@@ -2190,8 +2353,8 @@ fs::path predict(const Options&o,fs::path out={
 ){
 Run r=runtime(o);
 need(o.m.at("frame")=="eci"||o.m.at("frame")=="ecef",1,"frame","eci/ecef only");
-Config cfg=constellation(fs::u8path(o.m.at("config")),r.start,r.end,o.m.at("exclude-missing")=="true",o.m.at("exclude-damaged")=="true");
 Settings set=settings(fs::u8path(o.m.at("settings")));
+Config cfg=constellation(fs::u8path(o.m.at("config")),r.start,r.end,o.m.at("exclude-missing")=="true",o.m.at("exclude-damaged")=="true",&set.phys);
 if(o.m.at("initial-npy")!="none")npy(fs::u8path(o.m.at("initial-npy")),cfg.s,r.budget);
 Environment env{
 r.start,r.ens,set,-1,{
@@ -2204,6 +2367,13 @@ env.node(0);
 env.node(1);
 U lastnode=std::max<U>(1,(mul(r.M-1,U(r.step))+U(r.ens)-1)/U(r.ens));
 env.node(I(lastnode));
+if(!set.eopT.empty()||!set.ephT.empty()||!set.denT.empty()){
+U maxnode=lastnode+1;
+I hi=r.start+I(maxnode)*r.ens;
+if(!set.eopT.empty())need(set.eopT.front()<=r.start-500000000LL&&set.eopT.back()>=hi+500000000LL,2,"eop_csv","table does not cover run window +-0.5s");
+if(!set.ephT.empty())need(set.ephT.front()<=r.start&&set.ephT.back()>=hi,2,"ephemeris_csv","table does not cover run window");
+if(!set.denT.empty())need(set.denT.front()<=r.start&&set.denT.back()>=hi,2,"density_csv","table does not cover run window");
+}
 if(out.empty())out=newrun(o.m.at("output"));
 else fs::create_directories(out);
 atomic(out/"effective_config.json",effective(o).dump());
@@ -2219,6 +2389,11 @@ identity["config_sha256"]=hex(cfg.config);
 identity["geometry_sha256"]=hex(cfg.geometry);
 identity["initial_state_sha256"]=hex(sha(init));
 identity["settings_sha256"]=hex(sha(set.raw));
+if(!set.ext.empty()){
+J ex=J::arr();
+for(auto&e:set.ext){J q=J::obj();q["role"]=e.role;q["sha256"]=e.sha;q["size"]=e.size;ex.a.push_back(q);}
+identity["external_data"]=ex;
+}
 B id=sha(std::string("satpred-mvp-run-v1\0",19)+identity.dump());
 J products=J::arr();
 for(U fi=0;fi<r.files;++fi){
@@ -2265,6 +2440,13 @@ m["inputs"]["config_sha256"]=hex(cfg.config);
 m["inputs"]["geometry_sha256"]=hex(cfg.geometry);
 m["inputs"]["initial_state_sha256"]=hex(sha(init));
 m["inputs"]["settings_sha256"]=hex(sha(set.raw));
+{
+J ex=J::arr();
+std::vector<Settings::Ext> es=set.ext;
+std::sort(es.begin(),es.end(),[](const Settings::Ext&a,const Settings::Ext&b){return a.role<b.role||(a.role==b.role&&a.sha<b.sha);});
+for(auto&e:es){J q=J::obj();q["role"]=e.role;q["sha256"]=e.sha;q["size"]=e.size;ex.a.push_back(q);}
+m["inputs"]["external_data"]=ex;
+}
 m["inputs"]["initial_mode"]=o.m.at("initial-npy")=="none"?"analytic":"npy";
 m["catalog"]=J::obj();
 m["catalog"]["N"]=U(cfg.s.size());
@@ -2283,6 +2465,19 @@ j["status_base"]=s.base;
 a.a.push_back(j);
 }
 m["catalog"]["members"]=a;
+{
+J ps=J::arr();
+std::set<uint32_t> nu(cfg.physNotUsed.begin(),cfg.physNotUsed.end());
+for(auto&kv:set.phys){
+J q=J::obj();
+q["gid"]=U(kv.first);
+q["source"]=kv.second.source?kv.second.source_v:"placeholder";
+q["reference"]=kv.second.reference?kv.second.reference_v:"";
+q["not_used"]=nu.count(kv.first)!=0;
+ps.a.push_back(q);
+}
+m["phys_sources"]=ps;
+}
 m["products"]=products;
 m["failures"]=ff;
 J warnings=J::arr();
@@ -3254,7 +3449,7 @@ return 0;
 if(o.m.count("help")){
 std::cout<<app<<" 0.1.0-mvp\n";
 for(auto&kv:defaults(app))std::cout<<"  --"<<kv.first<<" (default "<<kv.second<<")\n";
-std::cout<<"External CSV/phys overrides, CUDA and engine diagnostic protocol unsupported; see docs.\n";
+std::cout<<"External eop/ephemeris/density CSV, gravity/phys JSON overrides are supported; CUDA and orbit_engine appendix-D diagnostic protocol are unsupported; see docs.\n";
 return 0;
 }
 if(o.m.count("dump-defaults")){

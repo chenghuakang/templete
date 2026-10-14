@@ -23,7 +23,7 @@
 
 以下也是后续实现任务，不能因为全流程 demo 成功就忽略：
 
-1. 外部 eop_csv、ephemeris_csv、density_csv、phys_json：收到请求返回 Arg。gravity_json 支持有限覆盖，但外部文件快照/全身份记录未完整实现。
+1. 外部 eop_csv、ephemeris_csv、density_csv、phys_json：已支持（相对 settings 目录解析，格式/SHA256/size 校验并写入 manifest inputs.external_data[]；EOP 覆盖 dut1/xp/yp/tt 并驱动 Rdot 差分，外部星历直接作为积分轴，外部 rho 覆盖默认密度且仍乘一次 density_scale；phys_json 按 gid 覆写名义成员，被筛除成员记录 not_used 于 phys_sources[]；覆盖不足返回 Config，不外推）。gravity_json 支持部分覆盖并记录外部文件身份。
 2. Walker 层中 satellite 逐星覆写：当前 Config 拒绝；需要使用 explicit 层，不会静默丢弃覆写。
 3. 文档第11章 canonical JSON 与 run_id：当前明确采用 MVP 身份，而非标准身份；manifest 写警告。geometry/config 原始摘要分离已实现。
 4. 内存：当前按包缓冲轨道/图，并保守预检部分缓冲和候选。batch 仅解析，不改变规划。不承诺覆盖所有自有分配峰值；并非文档严格有界内存实现。大包可以 Config 拒绝，即使正式版本应能够流式接受。
