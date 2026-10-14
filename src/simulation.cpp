@@ -863,9 +863,24 @@ namespace unified {
             return 0;
         }
         if(opts.dump){
+            // Typed canonical registry (SDD §14.3 / satpred §10.1): stdout + simulation_defaults.json.
             J j=J::obj();
-            for(auto&d:defaults)j[std::string(d.name)]=std::string(d.value);
+            j["format"]="hypersim-simulation-defaults-1";
+            J params=J::arr();
+            for(auto&d:defaults){
+                J p=J::obj();
+                p["name"]=std::string(d.name);
+                p["type"]=std::string(d.type);
+                p["default"]=std::string(d.value);
+                if(!d.unit.empty())p["unit"]=std::string(d.unit);
+                p["stage"]=std::string(d.stage);
+                p["valid"]=std::string(d.valid);
+                p["affects_business_run_id"]=d.business;
+                params.a.push_back(p);
+            }
+            j["params"]=params;
             std::cout<<j.dump()<<'\n';
+            atomic(fs::path("./simulation_defaults.json"),j.dump());
             return 0;
         }
         if(opts.self){
