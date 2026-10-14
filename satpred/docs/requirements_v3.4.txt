@@ -1,0 +1,1342 @@
+satpred / satnet 纯C++软件构建规格（代码要求与测试要求分离版）
+==============================================================================
+文档编号：SATPRED-SATNET-CPP
+版本：3.4（逻辑统一修订版）
+日期：2026-10-13
+编码：UTF-8 BOM
+用途：仅用C++17从零实现默认可运行的CPU轨道与卫星网络软件；测试可对照外部参考实现。
+
+0. 文档结构与效力
+------------------------------------------------------------------------------
+第一部分（第1–11章）是产品代码要求：生产二进制必须完全依据本文公式、格式、默认值和错误规则实现，
+全部产品逻辑用C++17编写，不依赖Python解释器、numpy、SciPy或任何运行时脚本。
+第二部分（第12–13章）是测试与验证要求：测试代码独立于产品，可以使用任何语言与外部库
+（SciPy、ERFA、MPFR、numpy、独立参考脚本等）作为对照，但不参与产品构建或运行，不进入发布二进制。
+第三部分（第14章）是未来功能义务，默认关闭并保留；附录A/B是固定字节字典，附录C是DOP853数值表。
+“必须”为验收要求；“禁止”为不允许行为；local-v1表示本文新确定的规则，不冒充历史原文。
+规则定义完整不等于实现完成；测试通过以实际日志和摘要为证。文档版本3.4与软件/容器版本独立；本次不改变SATC/SATNET既有字节布局。
+
+0.1 产品与测试的边界
+产品：satpred、satnet、satread、netread、satdemo、orbit_engine（库+可执行）、公共库libsatcore。
+产品只允许依赖：C++17标准库、操作系统API、OpenMP；可选CUDA仅限G目标。禁止运行时调用外部程序做计算
+（satnet调用自家satpred、satdemo调用自家satnet、satread/netread在无有效成功标记时调用自家satdemo除外）。禁止把测试用参考库的结果打包成运行时查表替代实现。
+产品内部数学允许系统libm（B）；输出确定性按第13章测试界定，不因使用libm而宣称跨平台逐位相同。
+测试：tests/目录可包含C++、Python、脚本和外部库对照；测试失败不得通过修改产品阈值掩盖。
+测试可用外部函数证明产品正确性，但产品行为必须由本文决定；外部库版本必须写入测试报告。
+构建：唯一构建系统为CMake（>=3.20）；不使用Python构建脚本；平台脚本只是CMake的薄包装。
+
+0.2 零参数运行
+发布目录提供satdemo（Windows为satdemo.exe）。直接运行satdemo：定位自身目录→加载自带样例→
+调用同目录satnet（satnet内部调用satpred）→验证所有包/图/源SHA→写导出和摘要→返回0。
+不要求任何参数、交互、网络、下载、安装或管理员权限。所需运行环境只有操作系统、C/C++运行库、
+可选OpenMP运行库；不要求Python。
+satpred、satnet、satread、netread不带参数也可运行，默认值见第10章。
+APP_HOME默认用户主目录下.satpred（Linux $HOME，Windows %USERPROFILE%），SATPRED_HOME可覆盖；
+运行目录APP_HOME/runs/run_000001起，原子创建目录取最小未用序号，不覆盖旧结果。
+成功完整验证后原子更新APP_HOME/last_success.json；失败不更新。
+
+0.3 统一原则、范围与约定
+本版为对v3.3的完整修订，不是补丁清单；保留全部产品、测试、未来义务和附录数值表。
+B=默认CPU工程近似轨道与网络基线；G=可选CUDA网络候选评估；F=第14章独立未来扩展。
+按项目用途优先保证离线零参数运行、真实输入身份、严格容器校验、有界内存、可复现同模型数值和可追踪验收。
+不以兼容编号冒称严格GCRS/ITRS，不以工程模型宣称真实厘米级定轨，不以G冒称GPU轨道传播。
+正文规定算法/业务语义，附录A/B规定固定字节布局，附录D规定诊断协议；必须同时满足，不得以覆盖关系忽略一方。
+附录E记载修订依据而不产生第二套规范。修订要求是设计裁决，不代表软件已实现或测试已通过。
+B已明确要求的新图源绑定、完整metadata、取消清理、读取验证不因第14章有相关历史条目而延期。
+所有未实现F请求返回Arg；不得用成功占位输出替代实现。
+
+目录
+第一部分 产品代码要求
+ 1 源码结构、构建与部署
+ 2 基础类型、时间、错误与通用解析器
+ 3 CLI与默认行为
+ 4 XML配置、Catalog、节点与状态
+ 5 settings、外部数据与初值
+ 6 数学模型与积分
+ 7 环境表、引擎接口与SATC生成
+ 8 网络算法
+ 9 SATNET、源绑定与读取器
+ 10 全参数默认值注册表与导出适配
+ 11 数据身份、manifest与事务
+第二部分 测试与验证要求
+ 12 测试体系、外部参考与报告规则
+ 13 测试矩阵与门槛
+第三部分 未来功能
+ 14 保留义务F与本地完整定义
+附录A SATC v3字段字典
+附录B SATNET v1字段字典
+附录C DOP853数值表与扩展算法
+附录D orbit_engine诊断协议v1
+附录E v3.4裁决与变更记录
+
+================================================================================
+第一部分 产品代码要求
+================================================================================
+
+1. 源码结构、构建与部署
+------------------------------------------------------------------------------
+1.1 目录
+satpred/
+ CMakeLists.txt                      唯一构建图（目标：satcore, orbit_engine, satpred, satnet, satread, netread, satdemo）
+ cmake/                              工具链/选项/安装规则
+ build.sh, build.ps1                 调用cmake配置+构建+可选ctest的薄包装
+ include/satpred/{base,time,text,xml,json,hash,io,cfg,init,earth,env,dyn,eph,net,sched}/*.hpp
+ src/base/{error.cpp,result.hpp,overflow.hpp,platform_posix.cpp,platform_win.cpp,process.cpp,paths.cpp}
+ src/text/{utf8.cpp,decimal.cpp,numfmt.cpp}         十进制精确解析/往返格式化
+ src/xml/{xml_parser.cpp}                           自实现受限XML解析器（第2.5节）
+ src/json/{json_parser.cpp,json_writer.cpp,canonical.cpp}
+ src/hash/{crc32c.cpp,sha256.cpp}
+ src/npy/{npy_reader.cpp}                           自实现.npy v1/v2读取（仅float64 C-order）
+ src/cfg/{defaults.cpp,cli.cpp,settings.cpp,constellation.cpp,network_xml.cpp,catalog.cpp,faults.cpp}
+ src/time/{utc.cpp,grid.cpp}
+ src/earth/{rotation.cpp,wgs84.cpp}
+ src/env/{env_table.cpp,sun_moon.cpp,density.cpp,external_tables.cpp}
+ src/dyn/{force.cpp,rk8_table.hpp,integrator.cpp,engine.cpp}
+ src/io/{satc_writer.cpp,satc_reader.cpp,manifest.cpp,atomic_file.cpp,mmap.cpp}
+ src/net/{spatial.cpp,topology.cpp,geometry.cpp,link_eval.cpp,antenna.cpp,orbit_source.cpp,graph_writer.cpp,graph_reader.cpp,links_export.cpp,link_kernel.cu}
+ apps/{satpred_main.cpp,satnet_main.cpp,satread_main.cpp,netread_main.cpp,satdemo_main.cpp,orbit_engine_main.cpp}
+ examples/{satellites.xml,nodes.xml,settings.json}
+ schemas/{orbit_manifest.schema.json,network_manifest.schema.json,settings.schema.json,nodes.schema.json}
+ tests/                              第12–13章；可含python/ 与外部对照脚本
+ docs/ reports/
+ build/bin/{satpred,satnet,satread,netread,satdemo,orbit_engine,test_*}
+ build/bin/examples/                  构建复制的自带资源
+文件可细分，但不得维护两套逻辑重复的权威实现；所有可执行文件共享libsatcore静态库。
+
+1.2 构建
+cmake -S . -B build -DSATPRED_CUDA=OFF -DSATPRED_TESTS=OFF；cmake --build build --config Release。
+选项：SATPRED_CUDA=OFF|AUTO|ON（默认OFF）、SATPRED_TESTS（默认OFF）、SATPRED_WERROR（默认ON）。
+AUTO无nvcc只构建CPU；ON无nvcc配置失败；工具链存在但CUDA编译失败必须失败，不伪装回退。
+GCC/Clang：-std=c++17 -O2 -fopenmp -ffp-contract=off -fno-fast-math。
+MSVC：/std:c++17 /O2 /EHsc /MD /fp:strict /utf-8 /openmp，定义NOMINMAX、WIN32_LEAN_AND_MEAN。
+nvcc：-std=c++17 -O2 --fmad=false，host编译器与CPU目标一致。
+Release二进制禁止依赖构建树路径；examples由安装步骤复制到bin/examples。
+构建记录compiler/标准库/选项/源码SHA清单到build/build_info.json并嵌入--version输出。
+
+1.3 平台
+Windows子进程CreateProcessW，参数按MSVC CRT规则引用（空参数、空格、引号、尾反斜杠）；
+Linux posix_spawn或fork/execvp，waitpid处理EINTR。程序目录由/proc/self/exe或GetModuleFileNameW取得。
+stdout二进制模式（Windows _setmode(_O_BINARY)）用于引擎流；控制台文本UTF-8（Windows SetConsoleOutputCP(65001)）。
+路径以UTF-8字符串在内部表示，Windows转UTF-16调用W API；支持空格/Unicode/长路径（\\?\前缀）。
+文件原子发布：写.part→flush→close→rename（POSIX rename / Windows MoveFileExW REPLACE_EXISTING|WRITE_THROUGH）。
+OpenMP线程数由--threads设置omp_set_num_threads；不依赖环境变量。
+不读取cwd相关的隐式配置；所有相对路径明确相对settings文件目录或输出根。
+
+2. 基础类型、时间、错误与通用解析器
+------------------------------------------------------------------------------
+2.1 类型
+namespace satpred::{base,text,xml,json,hash,time,cfg,init,earth,env,dyn,eph,io,sched,net}。
+TimeNs=int64 UTC POSIX纳秒；SI单位m、m/s、kg、rad、s；delay_us=uint32；bandwidth_bps=uint64。
+enum class Frame:uint8 {ECEF=0,GCRS=1,TEME=2}；ElemType:uint8 {F64=0,Q32=1}；
+Status:uint8 {OK=0,DAMAGED=1,MISSING=2}；FileKind:uint8 {SAMPLES=1,CHEB=2,INITIAL=3,CHECKPOINT=4}。
+ErrorCode:int {Ok=0,Arg=1,Config=2,Io=3,Propagation=4,Internal=5,Device=6,Integrity=7}。
+struct Error{ErrorCode code; std::string where; std::string message; long line=-1; long col=-1;}。
+template<class T> class Result：恰含value或Error之一；禁止用异常跨模块传播；main统一捕获std::exception转Internal。
+所有size/offset/count运算使用checked_add/checked_mul（__builtin_*_overflow或等价）；溢出返回Integrity或Arg。
+
+2.2 时间
+UTC文本YYYY-MM-DDTHH:MM:SS[.1..9位]Z：日历/闰年校验，拒绝秒=60、无Z、10位小数。
+days_from_civil按整数算法求日数；ns=(days*86400+sec)*1e9+frac（整数运算，预检溢出）。范围1970..2261。
+十进制秒解析：正则[+-]?digits[.digits][e[+-]digits]，按十进制有理数精确换算到ns，nearest-even；
+拒绝NaN/Inf/单位后缀/空串。duration_ns>0且<=30d；step_ns>=1e6；package_ns>=step_ns且整除。
+M=ceil(duration_ns/step_ns)；t_k=start+k*step，仅t_k<end输出。max_h_ns>=1；env_step_ns>=1e6。
+ISO输出固定"YYYY-MM-DDTHH:MM:SS.nnnnnnnnnZ"（9位）。
+
+2.3 错误输出
+stderr一行JSON：{"code":n,"name":"Config","where":"...","message":"...","line":l,"col":c}，
+再加人类可读一行。退出码=ErrorCode。所有产品命令成功返回0；单星失败不改变退出码（第7.6节）。
+
+2.4 数值文本
+浮点输出使用最短往返表示（std::to_chars，无则自实现Ryu等价）；读入使用std::from_chars或自实现严格解析。
+JSON/CSV中禁止输出NaN/Inf字面量，CSV用"nan"表示缺失值，JSON用null且仅在文档允许的字段出现。
+
+2.5 受限XML解析器（自实现）
+支持：UTF-8（可带BOM）、XML声明、注释、元素、属性（单双引号）、实体&lt;&gt;&amp;&quot;&apos;与&#...;数字实体、
+CDATA、空白文本。拒绝：DTD/DOCTYPE、处理指令（除XML声明）、命名空间前缀、外部实体、深度>64、文件>16MiB、
+重复属性、非法字符、元素间非空白文本。属性值去首尾空白后严格按字段类型解析。
+解析器返回元素树与行列号；所有Config错误带行列。
+
+2.6 JSON解析/写出（自实现）
+RFC 8259子集：对象/数组/字符串/数字/true/false/null；拒绝重复键、注释、尾逗号、NaN/Inf、控制字符、超过64层嵌套。
+整数字段必须是无小数/指数的十进制，按uint64/int64精确解析；浮点按strtod等价精确舍入。
+写出器：键顺序由调用者给出；canonical写出见第11.1节。
+
+2.7 .npy读取（自实现）
+支持v1.0/v2.0头，dtype '<f8'，fortran_order false，shape (N,6)；其他拒绝。数据按小端读取。
+
+3. CLI与默认行为
+------------------------------------------------------------------------------
+3.1 通用
+参数形式--name value或--name=value；布尔开关出现即true；重复参数拒绝；未知参数拒绝。
+--help/--version/--dump-defaults只输出不运行；三者互斥，收到其它运行参数返回Arg。
+--dump-defaults输出注册表JSON到stdout，不写运行目录，satpred/satnet均支持。无参数即以第10章默认运行。
+--output auto为默认：创建APP_HOME/runs/run_NNNNNN；显式目录必须不存在或为空。
+通用可覆盖参数：--threads（正整数，默认2）、--memory-budget（字节，正uint64，默认268435456）。
+除各命令明确列出的参数外，注册表其余项为内部固定配置，不因被登记就自动开放CLI；未知参数仍返回Arg。
+
+3.2 satpred
+-c/--config（默认bin/examples/satellites.xml）；--settings（默认bin/examples/settings.json；值none表示仅内置默认）；
+--start 2026-01-01T00:00:00Z；--duration 600；--step 10；--package 60；--max-h 10；--env-step 1；
+--batch 64；--threads 2；--frame eci|ecef（默认eci）；--output auto；--initial-npy（默认none）；
+--exclude-missing；--exclude-damaged。
+固定：F64、posvel、SAMPLES；收到fields/encoding/profile等未支持参数返回Arg。
+
+3.3 satnet
+--satellites（默认bin/examples/satellites.xml）；--nodes（默认bin/examples/nodes.xml）；--output auto；
+--start/--duration/--step/--package同satpred；--orbit-program（默认同目录satpred）；--orbit-dir（默认none）；
+--topology mesh|knn（默认mesh）；--backend cpu|cuda|auto（默认cpu）；--search-range-km 5000；
+--access-range-km 3000；--minimum-elevation 25；--knn-k 4；--wrap-planes；--access-first；--exclude-damaged；
+--reference-distance-km 1000；--distance-exponent 2；--processing-us 0。
+同时给orbit-dir与orbit-program：复用目录，警告并记录ignored_orbit_program。
+satnet调用satpred：同start/duration/step/package，--frame ecef，--output <run>/orbits，--threads同值；
+不传exclude-damaged（仅影响连接）；不透传settings（定制轨道先用satpred，再--orbit-dir）。
+backend=auto：有可用CUDA设备用cuda，否则cpu并记录；cuda：不可用返回Device；设备执行中出错返回Device。
+
+3.3.1 网络数值参数范围
+search_range_km/access_range_km/reference_distance_km必须finite且>0，转换m后仍finite；
+minimum_elevation必须finite且在[0,90]deg；distance_exponent必须finite且>=0；knn_k为正uint32；
+processing_us为uint32，0合法；所有边界先校验再转换，禁止超范围浮点到整数转换。
+--threads/--memory-budget遵3.1；--backend=auto仅在设备选择阶段无可用设备时回CPU，执行阶段失败仍返回Device。
+
+3.4 satread / netread / satdemo
+satread info|verify|csv [FILE] [OUT]；netread info|verify|csv [FILE] [OUT] [--source-orbit FILE]。
+无子命令=info；无FILE=读取last_success.json中的首个产物；无有效标记时运行satdemo生成默认案例后再读取。
+显式FILE不存在或非法：返回错误，不自动生成。csv默认输出同目录同stem.csv，存在则加_000001；显式OUT存在拒绝。
+info：先完整验证（verify）再打印摘要，输出verified=true/false。
+轨道CSV列：t_ns,global_id,name,status,x,y,z,vx,vy,vz（按时间、再按Catalog列）；
+网络CSV列：t_ns,src,dst,delay_us,bandwidth_bps,distance_m,kind。
+satdemo [--output auto] [--threads 2]：等价于默认satnet运行+全部验证+links.json导出+summary.json。
+
+4. XML配置、Catalog、节点与状态
+------------------------------------------------------------------------------
+4.1 卫星XML结构
+<constellation name?> { <radio/>? <phys/>? <layer>+ }
+<layer id? pattern? P? S? F?> { <orbit/>? <radio/>? <phys/>? <faults/>? <satellite/>* }
+pattern默认star；delta|star|explicit；tle拒绝（F）。id默认按出现顺序取最小未用正整数，范围1..65535，层按id排序。
+Walker：P默认18、S默认36、F默认0；P,S<=65535，P*S<=1e6，0<=F<P；explicit不得有<orbit/>父级，必须>=1个satellite。
+<orbit alt_km? a_km? e? inc_deg? raan0_deg? u0_deg? argp_deg?>：alt/a至多一个，均无则alt_km=1200；
+e默认0 [0,1)；inc_deg默认87.9 [0,180]；其余默认0；a<=1e9m；a(1-e)>=RE+120km。
+<satellite plane? slot? a_km?/alt_km? e? inc_deg? raan_deg? u_deg? argp_deg? name? radio? phys?>：
+plane默认0；slot默认该plane最小未用；(plane,slot)唯一且<=65534；P=maxplane+1，S=maxslot+1；
+若layer显式P/S必须等于推导值。
+几何：Omega=wrap(Omega0+spread*p/P)，spread=2pi(delta)/pi(star)；u=wrap(u0+2pi*s/S+2pi*F*p/(P*S))；M0=wrap(u-argp)。
+所有层名义槽位之和<=1e6。gid按(layer,plane,slot)字典序从0连续分配给所有名义槽位。
+Catalog=筛选后的成员按gid升序；N>=1否则Config；Ns=roundup(N,64)。
+名称默认L{layer}-P{plane:02}-S{slot:03}；24字节UTF-8，按完整码点截断，余0填充。
+
+4.2 radio/phys继承
+radio字段uplink_bps/downlink_bps(uint64)、antennas(uint32)；0合法。
+卫星默认10e9/10e9/6；user默认100e6/300e6/1；ground_station默认10e9/10e9/4。
+继承：系统默认→constellation.radio→layer.radio→satellite.radio，逐字段覆盖。
+phys字段mass_kg>0、drag_area_m2>=0、cd>=0、srp_area_m2>=0、cr>=0、source(placeholder|documented，默认placeholder)、reference(默认空)。
+系统默认260/10/2.2/10/1.3；继承系统→constellation.phys→layer.phys→satellite.phys→phys_json。
+documented要求reference非空；标签不改变计算。
+
+4.3 faults
+<faults>{<missing plane slot/>* <damaged plane slot/>* <event plane slot status? from? to?/>*}
+plane/slot默认0，必须指向实际成员；同成员missing/damaged互斥且不重复；永久missing不得有event。
+event status默认missing（ok|damaged|missing），from默认run_start，to默认run_end，要求from<to；
+同成员事件排序后不重叠，相邻允许；与运行区间不相交的事件保留在身份中但不输出。
+处理顺序：分配gid→静态基线→静态筛选（exclude仅移除永久missing/damaged）→事件绑定到Catalog列→初值。
+MISSING期间仍推进名义轨道、输出哨兵；DAMAGED输出名义坐标；数值失败不是MISSING。
+
+4.3.1 事件与包区间的唯一语义
+事件始终按真实UTC纳秒半开区间[from,to)判状态，不向采样点取整；输出片恰等于from时生效、恰等于to时恢复。
+包覆盖[start+k0*step, min(start+(k0+M)*step,run_end))；它的结束不是最后一片时刻。
+status0取包首片实际状态；将裁剪后的完整状态分段中所有与status0不同的区间写STATUS_EVENTS；恢复段与status0不同也必须写。
+包内完全没有采样点命中的短事件仍保留裁剪区间，不得因无输出命中删除输入身份；包外事件不写本包段。
+仅当存在非空的上述不同状态区间时写STATUS_EVENTS并置bit1；flags bit0表示Catalog存在永久或事件MISSING，即使该包无missing输出。
+读端查询未被STATUS_EVENTS覆盖的时刻返回status0；段内区间有序不重叠且在包逻辑范围内。
+
+4.4 地面XML
+<network name?>{<defaults>{<user .../>? <ground_station .../>?}? (<user/>|<ground_station/>)*}
+节点属性id? lat_deg? lon_deg? alt_m? uplink_bps? downlink_bps? antennas?。
+id默认u1,u2…/gw1,gw2…取最小未用；全网唯一非空。lat默认0 [-90,90]；lon默认0 [-180,180]；alt_m默认0 >=0（椭球高）。
+defaults中的radio覆盖系统默认，节点再覆盖。允许零地面节点。
+图id：卫星=Catalog列0..N-1；地面按XML顺序N..；节点总数<=uint32。
+
+4.5 自带样例
+examples/satellites.xml：
+<constellation name="OneWeb design regression">
+ <radio uplink_bps="10000000000" downlink_bps="10000000000" antennas="6"/>
+ <layer id="1" pattern="star" P="18" S="36" F="0">
+  <orbit alt_km="1200" e="0" inc_deg="87.9" raan0_deg="0" u0_deg="0" argp_deg="0"/>
+  <phys mass_kg="150" drag_area_m2="6" cd="2.2" srp_area_m2="6" cr="1.3" source="placeholder"/>
+ </layer>
+</constellation>
+examples/nodes.xml：
+<network name="fixed terminals">
+ <user id="u1" lat_deg="0" lon_deg="-100.3277" alt_m="0" uplink_bps="50000000" downlink_bps="200000000" antennas="1"/>
+ <ground_station id="gw1" lat_deg="0.1" lon_deg="-100.2" alt_m="100" uplink_bps="2000000000" downlink_bps="1000000000" antennas="4"/>
+</network>
+设计回归假设，不代表运营参数。
+
+5. settings、外部数据与初值
+------------------------------------------------------------------------------
+5.1 settings.json键集（共14键，未知键拒绝）
+drag,third_bodies,srp,relativity（bool，默认true）；density_scale（>=0，默认1.0）；
+dut1_s,xp_arcsec,yp_arcsec（默认0.0）；tt_minus_utc_s（默认69.184）；
+eop_csv,ephemeris_csv,density_csv,gravity_json,phys_json（路径，默认缺省=未设置）。
+路径相对settings文件目录；文件<=16MiB；读取后冻结字节并记录SHA256/size。
+自带examples/settings.json内容：
+{"drag":true,"third_bodies":true,"srp":true,"relativity":true,"density_scale":1.0,
+ "dut1_s":0.0,"xp_arcsec":0.0,"yp_arcsec":0.0,"tt_minus_utc_s":69.184}
+
+5.2 CSV/JSON覆盖
+CSV：UTF-8（可BOM）、逗号分隔、首行精确列名、无额外列/空行/注释、>=2数据行；
+utc_seconds按第2.2节十进制秒转ns，严格递增；其余列finite。
+eop_csv列：utc_seconds,dut1_s,xp_arcsec,yp_arcsec,tt_minus_utc_s；
+ephemeris_csv列：utc_seconds,sun_x,sun_y,sun_z,moon_x,moon_y,moon_z（m，积分参考轴，直接使用）；
+density_csv列：utc_seconds,rho_kg_m3（>=0；覆盖后仍乘density_scale一次）。
+插值：相邻节点线性；要求覆盖所有实际求值时刻（EOP再±0.5s用于Rdot差分）；不足返回Config，不外推。
+gravity_json：{"J":{"2":..,"3":..,"4":..}}，可部分覆盖，其他阶/键拒绝。
+phys_json：{"<gid>":{mass_kg?,drag_area_m2?,cd?,srp_area_m2?,cr?,source?,reference?}}；
+gid必须是名义成员，已筛除成员允许并记录not_used；explicit空槽拒绝。
+已设置的文件即使对应力关闭也必须格式合法；路径错误不回退。
+
+5.3 初值
+无--initial-npy：第6.1节解析初始化。有：float64[N,6] C-order，N=静态筛选后成员数，gid升序，
+列x,y,z,vx,vy,vz（m,m/s），轴=积分参考轴，历元=start；全部finite，每行半径>RE+100km。
+NPY只替换状态；几何/身份/phys/status仍来自XML。
+
+6. 数学模型与积分
+------------------------------------------------------------------------------
+6.0 常数（SI）
+mu=3.986004418e14，RE=6378137，b=6356752.314245，AU=149597870700，c=299792458，
+J2=1.08262617385222e-3，J3=-2.53241051856772e-6，J4=-1.61989759991697e-6，
+muSun=1.32712440018e20，muMoon=4.902800066e12，SRP1AU=4.56e-6 N/m²。
+列向量、主动旋转：Rx=[[1,0,0],[0,c,-s],[0,s,c]]，Ry=[[c,0,s],[0,1,0],[-s,0,c]]，Rz=[[c,-s,0],[s,c,0],[0,0,1]]。
+固定工程近似模型，不认证EGM2008/DE440/NRLMSISE/严格GCRS-ITRS。
+
+6.1 初值
+n=sqrt(mu/a³)，M=wrap(u-argp)。解E-e*sinE=M，可固定60次[0,2pi]二分。
+orbital x=a(cosE-e)，y=a*sqrt(1-e²)sinE；vx=-an*sinE/(1-e*cosE)，vy=an*sqrt(1-e²)cosE/(1-e*cosE)。
+Q=Rz(Omega)Rx(i)Rz(argp)；r=Q[x,y,0]，v=Q[vx,vy,0]。
+仅历元初始化使用此解析解，不能每片解析求解替代摄动数值推进。
+
+6.2 坐标
+U为UTC POSIX秒，T=(U+TTminusUTC-946728000)/(36525*86400)，arc=pi/648000。
+zeta=(2306.2181T+0.30188T²+0.017998T³)*arc；z=(2306.2181T+1.09468T²+0.018203T³)*arc；
+theta=(2004.3109T-0.42665T²-0.041833T³)*arc；P=Rz(z)Ry(-theta)Rz(zeta)。
+d=(U+DUT1-946728000)/86400，Tu=d/36525；GMST_deg=wrap360(280.46061837+360.98564736629d+0.000387933Tu²-Tu³/38710000)。
+R=Ry(xp*arc)Rx(yp*arc)Rz(-GMST)P；Rdot=[R(U+.5)-R(U-.5)]/1s。
+r_fixed=Rr，v_fixed=Rv+Rdot*r。
+这是近似J2000平均轴到近似地固，不是完整GCRS/ITRS；ERA不能不配套CIRS转换就替换GMST。
+
+6.3 带谐
+在地固轴r=norm(rf)，s=zf/r，P0=1,P1=s,D0=0,D1=1；初始a=-mu*rf/r³。
+n=2..4：Pn=((2n-1)sP(n-1)-(n-1)P(n-2))/n；Dn=((2n-1)(P(n-1)+sD(n-1))-(n-1)D(n-2))/n。
+f=mu*Jn*RE^n/r^(n+3)，g=(n+1)Pn+sDn；ax+=f*x*g，ay+=f*y*g，az+=f*r*((n+1)sPn-(1-s²)Dn)。
+惯性a=R^T af。验算J2=(1.5J2muRE²/r^5)*[x(5s²-1),y(5s²-1),z(5s²-3)]。
+
+6.4 日月估计（资料来源Schlyter类低精度解析算法；非DE440）
+d=(U-946598400)/86400，以下角度先以deg给出再转rad。
+太阳w=282.9404+4.70935e-5d，M=wrap360(356.0470+0.9856002585d)，e=0.016709-1.151e-9d，a=AU，i=Omega=0。
+用第6.1节Kepler位置公式（不应用轨道面旋转Q）求日期黄道向量S。月球Omega=125.1228-0.0529538083d，i=5.1454，w=318.0634+0.1643573223d，
+M=wrap360(115.3654+13.0649929509d)，e=.0549，a=60.2666*6378140m，求黄道向量，转lon,lat,dist。
+Ls=Ms+ws，D=M+w+Omega-Ls，F=M+w（sin/cos用rad）。
+dl(deg)=-1.274sin(M-2D)+.658sin(2D)-.186sin(Ms)-.059sin(2M-2D)-.057sin(M-2D+Ms)+.053sin(M+2D)
+ +.046sin(2D-Ms)+.041sin(M-Ms)-.035sin(D)-.031sin(M+Ms)-.015sin(2F-2D)+.011sin(M-4D)。
+db(deg)=-.173sin(F-2D)-.055sin(M-F-2D)-.046sin(M+F-2D)+.033sin(F+2D)+.017sin(2M+F)。
+ddist=6378140*(-.58cos(M-2D)-.46cos(2D))m。修正lon/lat/dist，重构黄道向量。
+eps=(23.4393-3.563e-7d)deg；惯性向量=P^T Rx(eps)*黄道向量。
+默认估计只对1970..2100日期开放；更广历元需外部星历。外部星历直接是本积分轴，不重复坐标旋转。
+
+6.5 第三体/相对论
+天体R和mu_b：a_b=mu_b*((R-r)/|R-r|³-R/|R|³)，保留地心项。
+a_schw=mu/(c²r³)*[(4mu/r-v·v)r+4(r·v)v]。LT/deSitter属于F。
+
+6.6 密度/阻力
+h=norm(r)-RE。高度(m)/密度(kg/m³)锚点：
+120000:2e-8,150000:2e-9,200000:3e-10,250000:7e-11,300000:2e-11,400000:4e-12,
+500000:8e-13,600000:2e-13,700000:7e-14,800000:3e-14,1000000:5e-15,1500000:1e-16。
+log(rho)高度线性插值，范围外夹端点，乘density_scale；外部rho覆盖默认。不是NRLMSISE。
+vrel_fixed=Rv+Rdot*r；a_drag_fixed=-.5rho*Cd*area/mass*|vrel|*vrel，惯性用R^T变回，无风。
+
+6.7 光压/地影
+ds=r-Sun，a_srp=4.56e-6*Cr*area/mass*(AU/|ds|)²*ds/|ds|*illum。
+u=Sun/|Sun|；r·u<0且|r-(r·u)u|<RE时柱影illum0，否则1。半影/平滑密度属于F，不偷偷改模型。
+总a为gravity+开启的各项。传播失败/跌到100km下隔离单星、后续NaN并记录失败原因；不要改成MISSING。
+临时MISSING期间仍推进名义轨道，以便恢复后有状态。
+
+6.8 积分主步
+附录C的12级DOP853主表，固定步。每输出间隔：sub=ceil(step_ns/max_h_ns)，h=step_ns/(1e9*sub)秒。
+子步边界按全局(k,j)计算：t=start_rel+k*step+j*h，不累加。K_i=f(t+C_i h, y+h Σ_{j<i}A_ij K_j)；y1=y+h Σ B_i K_i，j升序求和。
+k=0输出初值；k>0先推进再输出；最后一片后不推进。卫星间OpenMP并行，时间串行。
+每级与接受后检查finite及半径>RE+100km；失败则该星隔离：记录首次失败时间/原因，之后输出quietNaN，不再求值。
+B不使用extra级/dense/自适应（产品）。
+
+7. 环境表、引擎接口与SATC生成
+------------------------------------------------------------------------------
+7.1 环境表
+节点时刻start+j*env_step（j=0..J），J使最后节点>=最后输出时刻；最少2节点。
+每节点：R(3x3)、Rdot=(R(U+0.5)-R(U-0.5))/1s、Sun、Moon、rho_override(-1=默认模型)、J2,J3,J4、density_scale。
+按级时刻在相邻节点线性插值全部字段（R逐元素）。记录R^T R-I最大偏差到manifest。
+EOP/星历/密度外部覆盖在节点生成时求值；未设置用内置模型。有界窗口：按batch需求范围加载，全局编号不变。
+
+7.1.1 环境覆盖与精确时间
+环境节点全局编号与batch无关；以int64节点时刻定位，级时刻由全局(k,j,C_i)构造相对时间，不累加绝对大浮点秒。
+环境字段共29个物理double，加relative_s和reserved共31个传输double；进程内对象布局不作为文件ABI。
+EOP表须覆盖所有节点t与t±0.5s；日月/密度表须覆盖实际生成节点。最少两节点意味着单片运行也须预检第二节点。
+未设置外部星历时，默认日月节点必须在1970..2100（含2100年全年）；超过范围返回Config，不暗用外推。
+B环境始终生成Sun/Moon字段，第三体与SRP关闭也不扩大内置日期范围；范围外使用合法外部星历。
+所有已设置文件都解析并校验；关闭力项不豁免输入合法性。使用外部rho后仍只乘一次density_scale。
+R逐元素线性插值是B固定算法，不能改为四元数或正交化；瞬时节点精度与插值偏差分别报告。
+
+7.2 引擎库接口（进程内）
+orbit_engine作为libsatcore的dyn模块，由satpred进程内调用；独立可执行orbit_engine仅用于测试/诊断，
+其命令行：orbit_engine request.json（请求含states.bin、env.bin路径与参数），输出同格式流到stdout。
+struct EngineRequest{int64 run_start_ns, window_t0_ns, step_ns, max_h_ns; uint64 global_index0; uint32 M,N,batch; uint32 flags; std::vector<uint32> failed_indices;}
+window_t0_ns必须等于run_start_ns+global_index0*step_ns（预检溢出）；M为输出片数，不是推进间隔数。
+failed_indices严格升序、不重复、均<N；续接时一并传递原Failure记录，不能只留下index而丢失首次时间/原因。
+flags bit0 drag/1 third/2 relativity/3 srp。
+输入：名义状态[N][6]+phys[N][5]；环境窗口节点数组（第7.1节逻辑字段；诊断序列化为附录D的31个double/节点，relative_s相对run_start，末字段reserved=0）。
+输出：回调或缓冲[M][6][Ns]小端double，padding quietNaN(0x7FF8000000000000)；失败星按7.2.1在失败发现后的输出片起NaN。
+结果：final_states[N][6]（名义，含MISSING星）、failed[{index,time_ns,reason}]。
+引擎不施加MISSING遮蔽；遮蔽在SATC写出时按状态表施加，保证恢复后可继续。
+窗口续接：下一窗口以上一窗口final_states为初值，重叠一片，写出时丢弃重叠首片。
+
+7.2.1 续接与首次失败时刻
+窗口M>=1；M=1只输出初态，不推进。下一窗口global_index0=上一窗口global_index0+M-1，状态为上窗口最后输出时刻名义状态。
+除首窗口外，丢弃重叠首片；失败集合累计且失败成员不重新求值；run末片输出后不推进到run_end。
+首次失败发生在RK级时刻时，用本级公式所得相对秒转ns（nearest-even）并checked加run_start；另记global_index/substep/stage。
+该时间标记为定位用途；当前失败子步后的下一个输出片开始填NaN，不能回写早于实际发现时刻的已发布片。
+名义失败星final_states填6个规范NaN，成功的MISSING成员final_states仍为正常名义状态。
+诊断输入中已失败成员允许6个规范NaN，其它成员必须全部finite；禁止部分NaN和Inf。
+
+7.3 预算
+memory_budget默认268435456字节：状态/K级/环境窗口/输出缓冲/候选与边的自有分配；
+预估N*6*8*15 + batch*6*Ns*8 + env_window*31*8 + 网络候选；超预算先把batch减到1，仍超则Config。
+文件读取用mmap或分片读取，不整文件读入。
+
+7.3.1 有界资源执行规则
+memory_budget约束产品可控制的自有分配峰值，不是进程RSS保证；共享库/OS页缓存/线程栈等另报，不得宣称总RSS等于预算。
+预估必须包含：冻结输入和解析树、Catalog/事件、状态/K、环境窗口、输出缓冲、节点、空间索引、候选、天线/边、metadata及验证/导出缓冲。
+各分配在实际申请前checked核算并预留；batch减小会重新规划环境窗口与缓冲，但不改变全局节点和数学求值顺序。
+Catalog保留N上限1e6、名义槽位总数上限1e6；此为格式/配置上限，不是默认预算可运行承诺。
+N=1e6时，仅N*6*8*15已达720000000字节，超过默认256MiB；batch=1仍不足就Config，提示增大--memory-budget或减小规模。
+网格密集候选最坏可O(N²)，候选/边/metadata等超过预算返回Config，不截断候选、不丢边、不伪complete。
+轨道/图/CSV/links按包按片流式处理，不缓存全运行；metadata大小由checked边界和预算决定，不自动套用配置文件16MiB上限。
+读取外部有效文件但预算不足返回Config；越界/恶意大小/整数溢出返回Integrity；系统读取失败Io。
+
+7.4 SATC SAMPLES写出（布局见附录A）
+major=3,minor=0,file_kind=1,frame=eci→1/ecef→0,accuracy_class=2,elem_type=0,C=6,comp_mask=0x3F,cheb_degree=0,
+q_pos=q_vel=0,initial_state_hash=0,propagator="c-rk8",backend="cpu",time_scale="UTC-POSIX",
+generator_version=1,software_version=(1<<16)|(0<<8)|0（首版，随实现版本变更），
+flags：bit0=Catalog含任何missing（永久或事件）；bit1=有STATUS_EVENTS；bit2=0；bit3=0。
+包：D=package_ns，M_full=D/step，按全局片号分包，文件pred_{index:06d}.sbin，尾包不足合法。
+段：目录→SAT_TABLE→NAME_TABLE→TIME_INDEX→STATUS_EVENTS?→DATA_TENSOR→Footer；对齐与CRC按附录A。
+status0=包首片实际状态；STATUS_EVENTS写与status0不同的恒定区间（裁剪到包范围），含恢复段。
+Tensor：i>=N或该时刻MISSING→quietNaN；失败星从失败发现后的输出片→quietNaN（manifest failures解释）。
+CRC32C：反射多项式0x82F63B78，初值0xFFFFFFFF，结果取反；"123456789"→0xE3069283；逐片CRC覆盖整个slice。
+
+7.5 SATC读取判定（satread与satnet共用satc_reader）
+magic/major/endian/header_size/header_crc；enum合法；Ns=roundup(N,64)；stride一致；section_count>=1；
+必需段恰一次，可选段至多一次；未知段跳过但校验边界/对齐/不重叠（非张量未知段校验crc）；
+所有段在header/dir之后、Footer之前，不重叠；tensor 4096对齐，其他64对齐；gap与reserved全0；
+TIME_INDEX t_ns=t0+j*step；每片CRC；Footer SEND/dir_crc/file_size/tensor_bytes；文件尾无多余字节。
+数值：每成员每片6值全finite或全规范NaN；部分NaN/Inf拒绝；MISSING时刻必须NaN。
+跨包：Catalog/geometry/config/run范围/step一致，k0连续，总片数=M_total。
+verify成功输出SATC_INTEGRITY_OK；未知minor仅读已知结构并标unsupported_minor_features。
+
+7.6 失败与状态码
+单星失败：继续，manifest status=complete_with_failures，退出0。全部Catalog成员均数值失败：退出4，不发布成功manifest。
+“全部”以静态筛选后Catalog的名义传播成员为集合，不受某片MISSING/DAMAGED或网络exclude-damaged影响。
+永久MISSING成员也推进名义状态，因此全部成员永久MISSING但名义传播成功仍合法，可能得到零边图；不把状态缺失当作数值失败。
+无成员：Config。环境覆盖不足：Config。写失败：Io。
+
+8. 网络算法
+------------------------------------------------------------------------------
+8.0 数据流
+每片：由源包取ECEF位置；valid[i]=非MISSING且6值finite（exclude-damaged时再排DAMAGED）；
+空间网格索引（单元边长=max(search_range,access_range)）→候选（mesh/knn + 接入）→几何评估→
+整数化带宽/延迟→稳定贪心天线分配→有向边排序写出。图节点始终N+地面数，不随valid变化。
+8.1 地面坐标与仰角（NET-GEO-001）
+
+地面使用 WGS84 椭球参数 a=6378137 m、b=6356752.314245 m，e²=1−b²/a²。给定大地纬度 φ、经度 λ、椭球高 h：
+
+\[
+N_\phi=\frac{a}{\sqrt{1-e^2\sin^2\phi}},\quad
+\mathbf r_g=\begin{bmatrix}(N_\phi+h)\cos\phi\cos\lambda\\(N_\phi+h)\cos\phi\sin\lambda\\((1-e^2)N_\phi+h)\sin\phi\end{bmatrix}
+\]
+
+\[
+\hat{\mathbf u}=\begin{bmatrix}\cos\phi\cos\lambda\\\cos\phi\sin\lambda\\\sin\phi\end{bmatrix},\quad
+E=\arcsin\left(\mathrm{clamp}\left(\frac{(\mathbf r_s-\mathbf r_g)\cdot\hat{\mathbf u}}{\|\mathbf r_s-\mathbf r_g\|},-1,1\right)\right).
+\]
+
+必须用大地法线，不以地心径向替代局部竖直。E 等于门限时允许连接。默认核函数使用 `sin(E)+1e-12 >= sin(E_min)`，该容差仅用于边界舍入，不作为放宽实际仰角的理由。90°门限可接受恰在天顶的卫星，不应测试为“必然无接入边”。零距离或非有限距离拒绝。
+
+8.2 地球遮挡（NET-GEO-002）
+
+对卫星-卫星及卫星-地面候选，需判断连接线段是否穿入地球椭球。用 `(x/a,y/a,z/b)` 缩放两个端点 A、B，令 V=B−A：
+
+\[
+u=\mathrm{clamp}(-A\cdot V/(V\cdot V),0,1),\quad q=\|A+uV\|^2.
+\]
+
+q<1−1e−12 时连接拒绝；容差允许表面端点/切线的舍入。此模型不含山体、建筑、对流层折射、雨衰或天线机械遮挡。
+
+8.3 候选搜索与性能（NET-SEARCH-001）
+
+不得默认分配全部 N×N 距离矩阵。允许 KD-tree、空间哈希/网格等索引：
+- 当前 mesh 直接生成 O(N) 个逻辑邻接候选，再做距离/可见性判断，等价于候选交集优化。
+- ground access 必须按半径索引查询候选，而不是对每个地面节点无条件扫描全部卫星。
+- knn 必须限制在星间半径内，再取 k 个最近卫星候选。
+- 所有索引结果都要用物理三维距离再检查；索引不能取代可见性和天线校验。
+
+默认选择有序空间网格索引，单元边长取两类搜索半径的较大值，半径查询只访问相交邻格。复杂度取决于候选密度，密集最坏情况仍可能 O(N²)，不得声称对任意输入保证 O(N log N)。同距离候选以节点 id 打破平局。
+
+8.4 默认 mesh 拓扑（NET-TOPO-001）
+
+把每层视为 `(plane,slot)` 网格。每个有效卫星的逻辑邻居为同面 slot±1、邻面 plane±1 的同 slot：
+- slot 方向按 S 闭合成环；自环删除、重复无向对去重。
+- plane 方向默认不闭合；`--wrap-planes` 才允许 P−1 与0相连，尤其不能无条件跨越Star星座接缝。
+- 不同层默认不建mesh边；缺失/未列出槽位不自动跳跃接到下一有效成员。
+- 逻辑邻接只是候选，不保证最后四度；距离、遮挡、天线均可能使链路缺失。
+- 本模式是四邻居网格（+Grid），不是计算曼哈顿坐标距离，物理距离始终是欧氏距离。
+
+8.5 knn 与拓扑接口（NET-TOPO-002）
+
+对每个有效卫星，在星间范围内取最近 k 个其他卫星，候选取无向并集；允许跨层。并集节点度可能超过 k，由天线约束进一步限制。拓扑接口：
+
+using LegacyTopology = std::function<std::set<std::pair<uint32_t,uint32_t>>(
+    const Config&, const std::vector<Vec>&,
+    const std::vector<unsigned char>& valid,
+    const Spatial&, const Policy&)>;
+
+通过 `topologies()` 注册名称→第8.5.1节权威Topology回调。新增拓扑只提供候选，不得绕过统一距离、地球遮挡、状态、天线与整数输出检查。动态加载不可信代码不是本次需求。
+
+8.5.1 拓扑错误通道
+第8.5节Topology原返回set接口保留为LegacyTopology，只用于无失败的兼容包装。
+产品注册表的权威接口统一为：
+using Topology = std::function<Result<std::set<std::pair<uint32_t,uint32_t>>>(
+    const Config&, const std::vector<Vec>&, const std::vector<unsigned char>&,
+    const Spatial&, const Policy&)>;
+Config是含Catalog的只读有效配置视图，Vec是SI Vec3别名，不存在第二份默认来源。
+注册只在初始化单线程进行，计算阶段只读；注册名重复/未知拓扑Config；回调预算不足Config，内部异常在模块边界转Internal。
+该接口只生成候选；必须经过统一geometry/bandwidth/delay/antennas校验，不允许通过插件绕开资源或完整性规则。
+
+8.6 天线分配（NET-ANT-001）
+
+一对双工物理连接消耗每端各一根天线；双方向边不是两根天线。仅一个方向有带宽时，该物理连接仍占每端一根。所有ISL和接入共享节点天线总数，不可各自重复计数。
+
+当前稳定贪心：先按链路类别优先级，后按距离，最后按 `(min_id,max_id)` 排序；两端都有空闲天线且至少一方向衰减后带宽≥1 bit/s 时接受。默认ISL优先，`--access-first` 改为接入优先。每片重新分配，不保证全局最优、公平性或最小链路切换；不允许用“经典网格”绕过天线不足问题。
+
+MISSING/无效位置卫星没有候选；其他有效原始状态不因网络连接失败而改写。天线数量0合法且应导致零连接。
+
+8.7 方向性带宽（NET-BW-001）
+
+把 uplink 统一定义为源端发送能力、downlink 定义为目的端接收能力，卫星-卫星同样适用，不采用“对地上行/下行”的另一种解释。
+
+\[
+B_{ij}^{max}=\min(U_i,D_j),\qquad
+G(d)=\left(\frac{d_{ref}}{\max(d_{ref},d)}\right)^\alpha,\qquad
+B_{ij}=\left\lfloor B_{ij}^{max} G(d)\right\rfloor.
+\]
+
+默认 d_ref=1000000 m，α=2。增益必须限制在[0,1]，输出 uint64；求值不得发生超范围整型转换。i→j 与 j→i 独立计算。任一方向结果0则不写该方向；两向均0则不分配天线。
+
+带宽是每条链路的估计容量，不是节点总带宽共享或实际业务吞吐。反平方距离衰减是可替换工程模型，不是 Shannon 容量或射频链路预算，不因采用该公式就得到实测精度。
+
+带宽模型扩展必须提供有名字、有版本的 `gain(distance, geometry, parameters)` 接口；可接入SNR、雨衰、调制编码等模型，但当前只验收上述基础模型，元数据应记录实际参数。
+
+8.8 延迟（NET-DELAY-001）
+
+当前单跳时延：
+\[
+delay_{ij,\mu s}=\left\lceil\frac{d_{ij}}{299792458}\cdot10^6+processing_{\mu s}\right\rceil.
+\]
+
+输出必须是 uint32（单位微秒），处理延迟默认0；超范围报错，禁止饱和截断或整数回绕。延迟可以方向相同而带宽方向不同。
+
+报文序列化延迟 `packet_bits/B_ij`、排队与多跳路由均未纳入当前模型。如后续引入，必须新增显式参数及模型版本，不能改变旧输出语义而不记录。
+
+8.9 整数化与后端规则
+cap=min(U_i,D_j)。g=(d_ref/max(d_ref,d))^alpha，夹到[0,1]。
+g==1→B=cap；g==0→0；否则分解g=m*2^e（m为53位整数尾数），B=floor(cap*m>>(-e))用128位无符号乘（MSVC用_umul128或32位limb）。
+延迟：x=ceil(d/c*1e6+processing_us)，finite且0<=x<=4294967295，否则Arg/Integrity。
+G（CUDA）仅评估候选的distance/valid/gain；逻辑候选集合始终由主机构造并完整保留，GPU的valid不得预先删除主机候选；
+最终图始终由主机以CPU公式重评全部逻辑候选、整数化、分配天线，
+保证CPU/GPU有向边、片时间和边数一致，不要求溯源不同的完整文件逐字节相同；GPU核结果与主机重评对照记录到run统计（不是测试替代）。
+
+9. SATNET、源绑定与读取器
+------------------------------------------------------------------------------
+9.1 源包
+来源：--orbit-dir根或samples/中的*.sbin（排除.part）；或本次satpred输出。
+排序按global_index0；拒绝重复/缺口/重叠/同stem冲突；要求与CLI start/end/step/package一致、frame=ECEF、
+config_hash与本次卫星XML一致、Catalog gid集合一致。全部包通过第7.5节验证。
+快照：复用外部目录时复制到<run>/orbits并流式SHA256；复制前后size/mtime不变否则Integrity；之后只读快照。
+
+9.1.1 源快照稳定性
+size/mtime前后检查用于检测普通并发修改，不是对恶意相同size/mtime篡改的绝对证明；验收威胁模型为发布后源只读、普通竞争可检测。
+必须先完成快照，再验证快照CRC、SHA和跨包身份，所有网络计算只读快照，不重新读取外部源。
+如果需要抵御恶意写方，应独立增加文件锁/可信存储策略，不声称当前CRC或size/mtime可以认证敌对源。
+
+9.2 图文件（布局见附录B）
+每源包一个同stem.ngb；M/t0/step/k0与源相同；零边片保留。header flags bit0=0，source_orbit_sha256=快照完整文件SHA。
+metadata JSON（UTF-8无BOM）必须含：format="satnet-metadata-1.1", software_version, actual_backend, run_id,
+satellite_xml_sha256, ground_xml_sha256, source_hash_available=true, source_orbit_sha256(hex),
+source_accuracy_class, source_frame_method, nodes[], effective_policy{所有第3.3节参数}, 
+models{topology:{name,version:1},resource:{name:"duplex-shared-antennas",version:1},bandwidth:{name:"distance-power",version:1},
+delay:{name:"propagation-plus-processing",version:1},occlusion:{name:"ellipsoid-segment",version:1}},
+assumptions{fixed_ground:true,per_link_capacity:true,not_rf_budget:true,no_routing:true,processing_included:bool}。
+nodes[i]：id,kind(0/1/2),name,uplink_bps,downlink_bps,antennas；卫星加gid,layer,plane,slot,P,S；地面加xyz[3],up[3]。
+边：按(src,dst)升序，无自环/重复，bandwidth>0，distance finite>0，kind0=两卫星，kind1=卫星-地面。
+
+9.3 读取判定（netread与导出共用graph_reader）
+header 256/CRC/major=1/minor∈{0,1}/header_size/edge_size=32/flags仅bit0；metadata范围/JSON合法/CRC；
+时间索引M项、timestamp=t0+j*step、edge_offset连续、每片CRC；payload 4096对齐、total_edges*32=payload_bytes；
+Footer NETEND1/CRC/file_size；gap全0；无尾部多余字节。边字段按9.2规则；按无向对重算天线占用<=antennas。
+verify：无源→GRAPH_INTEGRITY_OK；--source-orbit→校验源文件完整性、SHA、ECEF、M/t0/step/k0、Catalog一致→SOURCE_VERIFIED。
+minor=0：按legacy读取，缺metadata键标LEGACY_INCOMPLETE_METADATA；flags bit0=1标UNBOUND。
+
+9.4 输出目录
+<run>/orbits/pred_*.sbin + manifest.json（轨道）；<run>/graphs/*.ngb；<run>/nodes.json；<run>/run.json；
+<run>/manifest.json（网络，正式）；<run>/manifest.csv；<run>/exports/*.links.json；<run>/effective_config.json；<run>/run.log。
+
+10. 全参数默认值注册表与导出适配
+------------------------------------------------------------------------------
+10.1 注册表
+src/cfg/defaults.cpp是唯一默认来源：每条{name,type,default,unit,min,max,stage,scope}。
+--help、effective_config.json、manifest、文档defaults.json（由satpred --dump-defaults生成）全部来自该表。
+新增参数未登记时静态断言/单元测试失败。显式值与默认值相等时有效配置相同。
+默认值汇总：
+运行：output auto；threads 2；batch 64；memory_budget 268435456；io_buffer 1048576；log_level info；progress true；
+verify_after_run true；snapshot copy；keep_complete_on_failure true；keep_part false；timeout 0（无）。
+satpred/satnet CLI默认见第3章；settings默认见5.1；XML默认见第4章；
+产品固定值见7.4；网络模型默认见第3.3节与第8章。
+导出：links_export true；direction directed；position WGS84 geodetic（lat deg, lon deg, alt km）；
+name_policy explicit_name_else_sat{gid+1}；loss constant 0.0；rate Mbit/s 6位小数；delay ms 3位小数；lat/lon 6位；alt 2位；raw保留。
+仿真默认（simulation_defaults.json，仅输出不执行）：time_model sample_and_hold；link_down drop queued/inflight；
+event_order topology→routes→packets；routing shortest_propagation_delay(tie by id)；route_update per_snapshot；
+queue drop_tail 100 packets；mtu 1500；protocol UDP；traffic first_user→first_ground（无则空）；
+offered_rate 1e6 bps；packet 1200 B；seed 20261013；serialization by_simulator；processing included_in_delay；
+node_budget independent_directed_links；radio_error none；backhaul disabled；stats_interval 1s；execute false。
+
+10.2 links.json导出
+每源包一个<stem>.links.json：{format:"satnet-links-1",run_id,source_graph_sha256,source_orbit_sha256,models,
+slices:[{timestamp_ns,valid_from_ns,valid_to_ns,links:[{endpoint1,endpoint2,rate,loss,delay,pos1,pos2,src,dst,bandwidth_bps,delay_us,distance_m,kind}]}]}。
+rate用u64整数商bandwidth_bps/1000000与六位零填充余数组成"整数.六位mbit"；
+delay用delay_us/1000与三位零填充余数组成"整数.三位ms"；loss="0.0"；
+禁止先将u64带宽转double导致低位丢失；显示格式不改变raw字段。
+pos="lat,lon,alt_km"（lat/lon %.6f，alt %.2f）。
+ECEF→WGS84：p=hypot(x,y)；lon=atan2(y,x)；lat=atan2(z,p(1-e²))迭代N=a/sqrt(1-e²sin²lat)，lat=atan2(z+e²N sinlat,p)，
+<=20次至|Δ|<=1e-13rad；h=p cos(lat)+z sin(lat)-a sqrt(1-e² sin² lat)；p<1e-9：lat=±pi/2,lon=0,h=|z|-b；原点拒绝。
+不收敛→Internal。显示舍入不影响任何计算。
+
+10.3 导出有效期与流式约束
+每片valid_from_ns=timestamp_ns；valid_to_ns=min(timestamp_ns+step_ns,run_end_ns)，不延长尾片到运行区间外。
+links与CSV按片流式输出，JSON数组也必须增量写；输出坐标显示舍入只发生在格式化末端。
+卫星显式XML名称用于endpoint，否则sat{gid+1}；Catalog自动L/P/S名不被误判为用户显式名。
+
+11. 数据身份、manifest与事务
+------------------------------------------------------------------------------
+11.1 摘要与canonical
+SHA256自实现（FIPS 180-4）；输入文件摘要为实际字节（含BOM）。
+geometry canonical v2：ASCII"satpred-geometry-v2"+0x00+u32层数；每层u16 id,u8 pattern(0/1/2),u8 elem_kind=1,u32 P,S,F；
+Walker追加6个小端f64(a,e,inc,raan0,u0,argp)；explicit追加u32 count与排序成员(u16 plane,u16 slot,6 f64)；
+-0归+0，角wrap[0,2pi)，inc[0,pi]；name/fault/phys/radio不入。geometry_hash=geometry canonical v2字节SHA256前8字节按小端解释的u64。
+config_hash=原始卫星XML实际字节SHA256前8字节按小端解释的u64（含BOM，不规范化）。
+geometry_sha256与config_sha256分别保留完整32字节；两个hash不可互换；初值摘要另算，不写入B的initial_state_hash字段。
+初值摘要=筛后[N][6]小端f64字节SHA256。
+canonical JSON：键按Unicode码点排序、无空白、UTF-8；整数十进制；浮点作为JSON字符串编码为"f64:"+16位小写大端hex（-0归+0，拒NaN/Inf）；数组保序。
+数值节点必须保留i64/u64/f64类别，不把1与1.0合并；身份构造的字段类型固定。
+字符串按RFC8259最小转义：引号/反斜杠转义，控制字符统一\u00xx（小写hex），其余合法Unicode直接UTF-8，斜杠不转义。
+键和字符串值不做Unicode归一化；输入代理项必须合法配对，转换为标量值后排序；重复键拒绝。
+轨道run_id=SHA256("satpred-run-v1"+0x00+canonical{schema:"orbit-run-1",software_version,model:"c-rk8-v1",canonical:"geometry-v2",
+geometry_sha256,config_sha256,initial_state_sha256,start_ns,end_ns,step_ns,package_ns,frame_method,
+force{drag,third_bodies,srp,relativity,J2,J3,J4,density_scale},integrator{max_h_ns,env_step_ns},
+environment_defaults{dut1_s,xp_arcsec,yp_arcsec,tt_minus_utc_s},catalog[{gid,name,status_base,radio{..},phys{..}}]按gid,
+status_events[{gid,status,from_ns,to_ns}]按gid/from/to,external_data[{role,sha256,size}]按role/sha256})。
+网络run_id=SHA256("satnet-run-v1"+0x00+canonical{schema:"network-run-1",software_version,start_ns,end_ns,step_ns,
+satellite_xml_sha256,ground_xml_sha256,sources[{global_index0,sha256}]按k0,nodes[...]按图id,policy{第3.3节全部有效参数，排除backend},models{...}})。
+排除：输出路径、墙钟、主机、日志级、batch、threads、backend。
+
+11.1.1 完整身份与执行差异
+run_id是确定的有效数学输入身份，不是输出文件SHA；backend/threads/batch不进入run_id，但实际执行记录进入software和metadata。
+CPU/G与不同线程可具有相同run_id而完整文件SHA不同；只有相同版本/输入、相同有效算法且按13章验证后才声称张量/边一致。
+网络身份policy保留全部数值/布尔建图参数；排除backend及资源/路径/调度参数、orbit-program/目录位置；源内容由sources全SHA决定。
+轨道来源与卫星XML绑定同时比较完整config_sha256（源manifest可用时）和header config_hash；无manifest时header低64位只是兼容检查，不能冒称完整XML摘要已验证。
+图source_orbit_sha256必须为完整快照文件32字节SHA，与geometry_hash/config_hash低64位的语义分开。
+
+11.2 manifest
+轨道manifest.json：{format:"SATPRED-B-1",status,software{version,build_info,compiler,actual_backend,threads},
+run{run_id,start_ns,end_ns,step_ns,package_ns,frame,frame_method,max_h_ns,env_step_ns,env_orthogonality_max},
+inputs{config_sha256,geometry_sha256,initial_state_sha256,initial_mode,settings_sha256,external_data[]},
+catalog{N,Ns,members[{index,gid,name,layer,plane,slot,status_base}]},phys_sources[],
+products[{file,M,M_full,t0_ns,global_index0,size,sha256}],failures[{gid,time_ns,reason}],warnings[]}。
+网络manifest.json：{format:"SATNET-1.1",status,software,run{run_id,start_ns,end_ns,step_ns,topology,policy,models},
+inputs{satellite_xml_sha256,ground_xml_sha256,orbit_manifest_sha256?,sources[]},nodes{satellites,ground,total},
+products[{source_file,source_sha256,graph_file,graph_sha256,links_file,links_sha256,M,t0_ns,global_index0,directed_edges}],warnings[]}。
+路径相对运行根；JSON UTF-8无BOM；schema随源码交付。
+
+11.3 事务
+每文件.part→内容+CRC→flush→close→rename；全部必需产品完成并算出SHA后才写manifest.json（同样原子）。
+B保证进程级原子可见，不认证断电持久性（warnings注明crash_durability_certified=false）。
+SIGINT/SIGTERM/CTRL_C：处理器仅设置安全取消标记；安全点停止、清理.part并退出Io(3)，message="cancelled"；
+已完整包保留供诊断；若必需步骤未全部完成，不发布成功manifest；失败不更新last_success。
+last_success.json仅在satdemo/satnet全部验证通过后原子更新。
+
+11.4 成功标记与自家子进程编排
+satnet调用satpred前显式传--threads/--memory-budget；satdemo调用satnet用明确参数数组，不用shell命令拼接。
+satpred直接运行完成轨道manifest，但不更新last_success。satnet全部包、图、源绑定和必需导出验证完成后更新。
+satdemo在satnet完成后再次验证全部产物并写summary；再次更新同一run的last_success可以幂等，失败则不作新的更新。
+last_success只用于定位上一次完整satnet产物；读端使用前验证标记路径/产物，不将标记存在等同内容有效。
+自家子进程返回已知ErrorCode则映射同码；启动/管道/超时Io，未知退出Internal；二进制stdout禁止混入日志。
+显式FILE非法立即报错；只有未指定FILE且无有效成功标记时允许调用satdemo生成样例。
+
+================================================================================
+第二部分 测试与验证要求（独立于产品代码）
+================================================================================
+
+12. 测试体系、外部参考与报告规则
+------------------------------------------------------------------------------
+12.1 原则
+产品按第一部分实现；测试验证产品是否符合第一部分，并可使用外部参考实现判断数值正确性。
+允许的外部参考：SciPy(DOP853/solve_ivp)、numpy、ERFA/SOFA、MPFR、astropy、独立手写脚本、其他语言实现。
+外部库只能出现在tests/与CI中；产品构建（SATPRED_TESTS=OFF）不得需要它们。
+测试报告必须记录：产品版本/构建信息/平台/编译器、外部库名称与版本、输入摘要、随机种子、
+每项PASS/FAIL/SKIP/NOT_TESTED/BLOCKED，以及失败样本索引与mean/RMS/max。
+阈值定义在测试代码与本文；产品不得因测试失败而放宽阈值；阈值变更需本文版本更新并说明理由。
+无有效样本不得PASS；环境不可用记SKIP；缺参考记BLOCKED。
+测试退出码：PASS 0 / FAIL 1 / INPUT 2 / SKIP 3。
+
+12.2 测试分层
+L0 单元（C++，ctest）：解析器、时间、CRC/SHA、溢出、整数化、几何函数、格式读写。
+L1 产品回归（C++驱动+外部对照）：轨道积分对SciPy、坐标对ERFA、链路对独立实现。
+L2 集成（脚本或C++）：零参数运行、包/图/绑定、迁移、部署、失败注入。
+L3 一致性/性能（可选硬件）：G对CPU、批不变、计时。
+L1–L3可用Python编写测试驱动；产品可执行文件通过子进程调用并读取其二进制输出。
+
+12.3 参考实现要求
+SciPy DOP853参考：同力函数（在Python中独立重写，不调用产品库）、rtol=1e-12、atol位置1e-5m/速度1e-8m/s，
+再用更严参数复算证明参考收敛。坐标参考：ERFA/pyerfa计算相应近似旋转以对照（B只对照GMST/岁差公式自身一致性）。
+CRC/SHA参考：独立Castagnoli CRC32C实现与RFC 3720向量；SHA256用Python hashlib与FIPS向量。
+禁止用zlib.crc32作为CRC32C oracle；两者多项式不同。
+链路参考：独立Python实现第8.1–8.9节公式（浮点与整数化按本文）。
+格式参考：Python struct按附录A/B独立解析，与产品reader结果逐字段比较。
+
+13. 测试矩阵与门槛
+------------------------------------------------------------------------------
+L0-01 CRC32C："123456789"→0xE3069283，空→0，增量与一次性相同；RFC 3720 32字节向量。
+L0-02 SHA256：空串/"abc"/百万'a'标准向量；大文件分块一致。
+L0-03 时间：9位小数精确ns；闰年/跨天/int64边界；拒绝60秒、10位小数、无Z；十进制秒舍入nearest-even难例。
+L0-04 XML：合法样例、默认补值、重复属性/未知元素/DTD/深度/大小拒绝、行列号正确。
+L0-05 JSON：重复键、尾逗号、NaN、深度、uint64边界；canonical输出字节与Python参考一致（>=3 golden vectors）。
+L0-06 .npy：v1/v2头、非f8/非C-order/形状错拒绝。
+L0-07 溢出：checked_add/mul边界；u64 cap×gain整数化对Python大整数精确结果一致（随机10^5例+难例）。
+L0-08 几何：WGS84转换往返（随机10^5点，位置误差<1e-6m，含极点/赤道/近地心）；仰角/遮挡对独立实现。
+L1-01 初值：解析初值对独立Kepler求解（Python）位置<1e-6m、速度<1e-9m/s；e∈{0,0.1,0.7}。
+L1-02 力：J2解析式退化；J3/J4对势函数数值梯度（相对1e-8）；drag功率≤0；SRP背向太阳；影区开关；
+日月对Schlyter独立实现<1e-6相对；相对论项对公式实现。
+L1-03 积分：标准648星中固定8星（gid 0,1,36,100,323,400,500,647）与MEO 8星（a=26560km,e=0.01,i=55°）；
+120s/输出10s对SciPy DOP853参考：max位置<=0.02m、速度<=2e-5m/s；72h：位置<=0.05m、速度<=5e-5m/s；
+max_h减半与env_step减半分别报告；只证明同模型数值一致，不证明真实轨道精度。
+L1-04 坐标：GMST/岁差实现对独立公式实现（Python）<1e-12rad；瞬时节点R正交性偏差<1e-9；Rdot对中心差分一致。
+线性插值后的R另报max|R^T R-I|，不适用瞬时R的1e-9门槛，不得偷偷正交化；积分门槛仍保持不变。
+L1-05 批不变：batch 1/7/64、threads 1/2 → TIME_INDEX与张量逐字节相同。
+L1-06 SATC：产品写出→Python struct独立解析逐字段；翻位/截断/未知major/错对齐/部分NaN拒绝；CSV逐值一致。
+L1-07 索引：seed 20261013，200组随机/边界点集，网格查询结果==暴力集合；tie按id。
+L1-08 拓扑：slot环、plane接缝、wrap-planes、缺槽不桥接、跨层无mesh、knn并集。
+L1-09 链路：天顶/地平/背地/极区/切线/门限两侧；50M/200M↔10G在d<=dref与d=2dref；u64最大cap gain=1；
+延迟ceil边界与u32溢出；对独立Python实现逐边一致。
+L1-10 天线：0天线/0cap/单向/优先级/双工只计一次；无向度<=antennas。
+L1-11 SATNET：头/索引/边/尾布局对Python struct；零边片；错源SHA/错时间/错gid拒绝；minor0 legacy标签。
+L1-12 run_id：>=3 golden vectors（输入→canonical字节→SHA）由Python独立生成，与产品一致；无关参数不改变id。
+L2-01 零参数：干净构建后运行satdemo，得到60片/10包/10图，全部verify与SOURCE_VERIFIED，links.json完整。
+L2-02 默认：satpred/satnet/satread/netread无参数成功；重复运行独立目录；显式坏路径失败不回退；显式0不被替换。
+L2-03 标准故障案例：gid0 missing、gid1 damaged、gid36 20..40s missing，125s/10s/60s→13片3包6/6/1，status0/事件/恢复正确。
+L2-04 失败注入：缺satpred、非零退出、短流、全部星失败、写失败、SIGINT→无伪complete manifest，.part清理。
+L2-05 部署：不同cwd、空格/Unicode路径、Windows引号参数与二进制stdout；未运行平台NOT_TESTED。
+L2-06 复用：--orbit-dir复用、快照SHA、源变化检测、重复/缺口/冲突拒绝。
+L2-07 schema：manifest/metadata/effective_config通过schema校验（Python jsonschema可用）。
+L3-01 G：候选valid相同，distance<=1e-6m、gain<=1e-12；最终图TIME_INDEX时间/计数及边载荷与CPU逐字节相同；完整文件可因actual_backend等溯源字段不同而不同。
+比较时逐项核对相同policy/models/nodes/source SHA/run_id；不比较物理edge_offset和CRC等因metadata长度变化而派生的值；
+各自文件必须完整verify与SOURCE_VERIFIED；无GPU→SKIP。
+L3-02 性能：预热后>=5次，分kernel/engine/端到端，记录median/min/max与硬件；无目标门槛（B）。
+L3-03 F项测试（T-ACC/T-EPH/T-DET/T-Q32/T-PACK）：定义见第14章，F未实现时记NOT_TESTED。
+
+================================================================================
+第三部分 未来功能
+================================================================================
+
+14. 保留义务F与本地完整定义
+------------------------------------------------------------------------------
+14.0 规则
+F默认enabled=false，产品收到未实现功能请求返回Arg；F项不得删除；实现前引用本节并在第13章加测试。
+F产品代码同样必须纯C++；F测试同样可用外部参考。以下先列原义务，再给本地完整定义。
+
+14.1 原义务清单
+F-DATA-01 数据锁定与发布数据目录
+建立data_manifest.json v2：format、data_dir、files[]。每项name,role,required,urls[],sha256,size,retrieved_utc,snapshot、
+archive/member（若压缩）、time_coverage、reference_system/units/normalization/tide_system。下载临时文件后hash/size成功才rename。
+已锁定项不得被普通lock覆盖；时变EOP/闰秒/太空天气--relock生成日期版本，旧快照保留。verify重算哈希，任何必需项null/缺失/不符返回非零。
+release配置必需数据hash null拒绝；开发可显式ALLOW_UNLOCKED_DATA并写manifest警告。离线模式禁止下载。
+需求数据：EGM2008 tide-free系数、DE440、finals2000A、Leap_Second、NRLMSISE系数、空间天气、IAU级数、潮汐表。
+下载地址不是哈希；ZIP时记录压缩包与实际解压成员摘要。内部镜像可追加URL但格式差异需独立适配。
+
+F-TIME-01 完整时间尺度
+实现UTC/TAI/TT/UT1、闰秒加载与覆盖、儒略日拆分、parse_duration(ns/us/ms/s/m/h/d)。
+跨闰秒输入/传播/输出策略冻结；POSIX输出不含23:59:60，但TT/UT1物理时刻不能误用POSIX秒差。
+EOP finals2000A加载/插值、越界策略；Eop::zero只允许明确C级估计并记录。
+
+F-COORD-01 完整地球定向
+IAU2006/2000A预章动/CIP/CIO/ERA/极移及Rdot；数据级数锁定。GCRS→ITRS与ERFA差<=1微角秒、位置<=1mm目标。
+TEME→GCRS供SGP4。所有R轴/乘法方向/速度导数通过独立数值差分和ERFA测试。C级GMST不能直接提升标签。
+
+F-ENV-01 完整环境
+DE440 SPK/ASCII reader（段边界/单位/时间尺度/位置速度）；EGM2008完整70x70/30x30递推；
+IERS潮汐Step1/2/3与频率项；NRLMSISE系数和Nrl输入；空间天气历史/预报来源；太阳/月球真实数据。
+EnvNode ABI冻结（字段、alignment、padding大小）并按RK/DOP级时刻生成；R1不同批划分逐字节不变。
+默认时间表过大时按批双buffer，不能以全运行缓存违反内存目标。
+
+F-MATH-01 自主确定性数学
+实现sin/cos/sincos/atan2/asin/acos/exp/log/pow/fmod_2pi，CPU/CUDA单源，<=1ulp；仅基本IEEE运算/sqrt，正确特殊值。
+Payne-Hanek大角规约、子正常数、NaN/Inf、rounding环境、禁FMA。测试侧用MPFR向量/随机/难例、跨编译器/设备对照（第13章），产品不链接MPFR。
+现有独立satmath历史代码可作为输入参考，但必须以当前源重新集成/测试，不能只复制报告。
+
+F-INIT-01 初始状态与satinit
+实现Brouwer-Lyddane J2–J5平根<->瞬根、固定迭代、确定性生成器；.sinit写读和所有INITIAL段。
+satinit generate/edit/import/export/retime/show/validate/diff；编辑纯函数、锁定/适配范围、geometry hash兼容、来源/编辑日志。
+retime实际传播状态，不能只改epoch。跨平台字节一致测试。
+
+F-DYN-01 完整动力学与REF
+实现完整gravity/drag/日月/SRP/solid tide/relativity，REF自适应DOP853和PROD固定RK8。每力项独立oracle/IERS测试。
+力模型配置显式grav degree/order和开关；数据/物理参数/姿态/面积来源完整记录。
+生产与REF同初值、时间、坐标、数据快照。通过T-ACC-01/02/03前不得将C模型误差推广。
+
+F-CHEB-01 段星历与阶段B
+实现60s段、LEO20s节点、MEO60s主步+稠密输出20/40s节点；四节点Hermite→Cheb7，输出坐标变换后再插值。
+实现CHEB/SEG_INDEX读写、Clenshaw位置/速度、CPU/CUDA stage B、Q32/F64、固定round-half-even及溢出处理。
+T-EPH段中/边界连续性、不同批/后端拼接一致。未实现不得生成.scheb或让SAMPLES冒称同源CHEB。
+
+F-IO-01 全容器与自动包
+实现INITIAL/CHECKPOINT/CHEB完整读写、所有可选段、golden files。PackageWriter线程安全乱序pwrite、原子发布。
+PackagePlanner实现第14.2节F-PACK自动规则、候选拒绝原因、calendar模式/F定义/首尾不足，明确无候选兜底或失败。
+完整manifest/catalog.csv/run_id/初值/data/accuracy schema；每个产品文件SHA256。Windows等价原子写与flush。
+
+F-SCHED-01 完整调度、取消和续算
+Backend接口CPU/CUDA，ChebRing/SliceRing/PinnedRing/Env双buffer、事件A/B/D2H、背压、内存上限、批自动选择。
+同View单写者，完成事件前不复用；慢IO测试。SIGINT/SIGTERM清理.part、退出码正确。
+checkpoint/restart校验run_id/输入哈希，从下一段续算，tensor/TIME_INDEX与一次性逐字节相同。
+
+F-TOOL-01 完整satread工具
+satread info/sats/dump/slice/track/verify/diff，支持四类SATC、mmap/片读取、大文件、状态事件查询、来源hash验证。
+独立C++参考解码器与生产解码器一致；gapfill/名义补全作为派生产品带来源标记、误差/限制，不改变原文件或精度等级。
+
+F-NET-EXT-01 网络高级功能
+真实RF/SNR/天线增益/频率/雨衰/MCS、per-beam和节点总带宽、半双工/多天线类型、照射/遮挡细节、切换迟滞、链路可用率。
+多跳路由、最短时延/容量约束、流量矩阵、排队/序列化/拥塞、地面回程和业务SLA。每项须定义输入、单位、方向、状态与输出格式版本。
+网络图source hash自动写入/验证与策略自描述是优先F-NET-EXT，不等真实RF模型完成。
+
+F-GPU-01 真正GPU轨道传播
+将完整force/环境/DOP/状态管理迁移设备，非仅网络核。常量/只读数据、设备对齐、异步传输、错误转换、CPU/GPU全状态/文件/图对照。
+真实消费者/数据中心GPU性能按完整算法测，不用J2 toy backend或短CPU计时。
+
+F-QA-01 质量、安全和发布
+格式/配置/网络输入fuzz（ASan/UBSan/TSan）、大规模/恶意长度/整数上溢、并发写、设备错误注入。
+CI Linux GCC/Clang、Windows MSVC、CUDA，源码/数据/报告版本绑定。发布前重新跑全部当前测试，记录SKIP/硬件/输入hash。
+
+F-PERF-01 性能原目标
+完整H场景：Starlink Gen1 3d阶段A GPU<=60s，8核CPU<=10min；Cheb阶段B消费GPU>=1e8、数据中心>=5e8卫星片/s；
+端到端磁盘>=80%利用，峰值内存不随时长增长。先确定真实硬件/驱动/数据/模型，报告延迟和吞吐分层。
+
+F-OPTIONAL-01 GPUDirect Storage和无损压缩
+只有不破坏片独立、随机读取、CRC和版本兼容时可加。压缩应为新产品/格式或明确扩展，不能默改SAMPLES二进制张量。
+
+
+14.2 本地完整定义（local-v1）
+F-PRODUCT（归F-IO）：INITIAL/CHECKPOINT/CHEB全部段读写。新生成STATE产品用SATC 3.1（minor=1），
+STATE_TENSOR的目录crc32c=整个段实际CRC；其余布局不变。旧3.0 STATE只读并标LEGACY_STATE_INTEGRITY_GAP。
+LAYER_PATTERN elem_kind：0经典BL平根、1瞬时根数、2本地数值平均根数（3.1新增；3.0只解释0）。
+F-PACK（归F-IO）：auto候选[60,120,300,600,900,1800,3600]s，max_file_bytes 1GiB，按真实全段字节预算选最大合格候选；
+无候选→Config；calendar：D整除86400s，UTC日分桶，不动采样网格，空桶不写，首尾不足合法；命名pred_{index:06d}。
+F-MIG（归F-IO）：geometry-v1仅保留旧值标UNVERIFIED；SATNET minor0只读；补绑定生成新minor1文件、边字节不变、
+重算metadata/索引/footer/CRC；原件不覆盖；记录migration{input_hash,output_hash,tool_version,changes}。
+F-RELIABILITY（归F-SCHED/F-IO）：POSIX fsync文件+父目录；Windows FlushFileBuffers+同卷替换；
+checkpoint含run_id/输入摘要/名义末态/失败集合/下段号，恢复输出与一次性逐字节相同。
+Q32 choose(bound)：K=2147483647；bound=有效分量绝对值上界（预扫描）；choose(0)=2^-40；
+否则最小2的整数幂q使K*q>=bound（整数尾数/指数精确比较）；encode=roundTiesToEven(x/q)，超[-K,K]拒绝；
+INT32_MIN为哨兵；默认预算位置0.02m、速度1e-5m/s，不满足拒绝。
+Cheb：L=60s，节点0/20/40/60s（tau=-1,-1/3,1/3,1），每轴8x8 Hermite系统（位置+导数(L/2)v），
+逆矩阵以有理数预计算为hex常量；a0不减半；Clenshaw求值；相邻段共享节点→C1连续；
+LEO主步20s；MEO主步60s+dense求20/40s；层class显式MEO才用60s。
+REF（测试侧）：独立自适应DOP853 rtol1e-12/atol 1e-5m,1e-8m/s/min_h1e-6s/max_h10s/max_rejections100；
+产品PROD仍固定步。
+本地平均根数（elem_kind=2）：非奇异近圆根数[a,e cosϖ,e sinϖ,tan(i/2)cosΩ,tan(i/2)sinΩ,λ]，
+一周期128等时节点J2..J5传播后取平均（角变量连续展开后平均再wrap），Newton 12次、差分1e-6、正则1e-12，
+残差a1e-3m/e1e-10/角1e-10rad；经典BL保留为独立功能不冒名。
+性能标准场景local-gen1：550km/53°/72x22 delta F1/1584星/72h/step0.1s/Cheb60s；
+目标：阶段A GPU<=60s或8核CPU<=10min；阶段B消费GPU>=1e8、数据中心>=5e8卫星片/s；磁盘>=80%。
+里程碑（本地）：M1基础/构建/配置/时间/数据/坐标；M2初值/完整力/REF/T-ACC-01,02；
+M3 Cheb/Q32/全容器/工具/T-ACC-03/T-EPH/F-PACK；M4调度/取消/恢复/T-DET/R1/可靠性；M5全平台/安全/性能/发布。
+
+14.3 F测试定义（第13章L3-03引用）
+T-ACC-01：PROD对REF，LEO 8星+MEO 8星，72h/10s：位置<=0.05m、速度<=5e-5m/s；h减半、REF收紧各一轮。
+T-ACC-02：逐力对独立公式/数据：加速度max abs<=1e-11 m/s²+1e-10|a_ref|；完整坐标对ERFA<=1μas、位置<=1mm；
+DE440读取对独立reader位置1mm/速度1e-6m/s。
+T-ACC-03：全链F64对同模型REF 72h：位置<=0.1m、速度<=1e-4m/s；Q32另加量化预算；physical_truth_certified=false除非有实测数据。
+T-EPH-01：每段tau 101固定点+32随机点（seed20261013），位置<=1mm，边界连续<=1e-6m。
+T-EPH-02：同点集F64解析速度<=1e-9 m/s，边界速度连续<=1e-9 m/s；不达标记FAIL，不放宽。
+T-DET：固定输入，batch 1/7/64/256、线程1/2/8、CPU/CUDA、checkpoint恢复→TIME_INDEX与张量逐字节相同。
+T-Q32：0/±半值/极值/哨兵/边界/溢出；CPU/CUDA字节一致。
+T-PACK：无缺口/重复、预算==实际字节、首尾/跨日/非整齐start、无候选失败。
+T-MATH（F-MATH）：对MPFR随机10^6+难例，<=1ulp；CPU/CUDA逐位一致。
+
+
+附录A SATC v3字段字典
+------------------------------------------------------------------------------
+A.1 文件类别
+
+| file_kind | 扩展名 | 内容 | 必须包含的段 |
+|---|---|---|---|
+| 1 SAMPLES | `.sbin` | 采样坐标（主产品） | SAT_TABLE、NAME_TABLE、TIME_INDEX、DATA_TENSOR |
+| 2 CHEB | `.scheb` | 切比雪夫星历（可选产品） | SAT_TABLE、NAME_TABLE、SEG_INDEX、CHEB_TENSOR |
+| 3 INITIAL | `.sinit` | 初始状态 | SAT_TABLE、NAME_TABLE、STATE_TENSOR、PHYS、LAYER_PATTERN、PROVENANCE |
+| 4 CHECKPOINT | `.sckpt` | 阶段 A 断点 | SAT_TABLE、STATE_TENSOR |
+
+STATUS_EVENTS 与 EDIT_LOG 为可选段（规则见各段定义）。
+
+A.2 通用规则
+
+1. 所有多字节字段为小端；结构无隐式填充，所有偏移在本文档中显式给出。
+2. 浮点为 IEEE 754 binary64；整数为二进制补码。
+3. 字符串字段为 UTF-8，定长，不足部分以 0x00 填充；长度用满时不保证有结束符。
+4. 时间：int64，UTC POSIX 纳秒（自 1970-01-01T00:00:00Z 起，不计闰秒）；输出网格不包含 23:59:60。
+5. 长度单位 m，速度单位 m/s，角度单位 rad（仅内部使用）。
+6. 校验算法统一为 CRC-32C（Castagnoli，多项式 0x1EDC6F41，初值 0xFFFFFFFF，结果取反），自主实现，须通过 RFC 3720 测试向量。
+7. 段在文件中的顺序固定：段目录 → SAT_TABLE → NAME_TABLE → TIME_INDEX 或 SEG_INDEX → STATUS_EVENTS → PHYS → LAYER_PATTERN → PROVENANCE → EDIT_LOG → 张量段（DATA_TENSOR / CHEB_TENSOR / STATE_TENSOR）→ 文件尾。
+8. 张量段起始偏移必须 4096 字节对齐（块对齐；具体设备直接I/O能力另行验证）；其他段 64 字节对齐；对齐填充字节为 0x00。
+9. 读取方遇到未知段类型必须跳过而不报错；遇到未知的 version_major 必须拒绝。
+
+A.3 文件布局
+
++----------------------------+ 0
+| FileHeader (512 B)         |
++----------------------------+ 512
+| SectionDirectory           |  section_count × 32 B
++----------------------------+ (64 对齐)
+| SAT_TABLE / NAME_TABLE     |
+| TIME_INDEX | SEG_INDEX     |
+| STATUS_EVENTS (可选) ...   |
++----------------------------+ (4096 对齐)
+| 张量段                      |  DATA_TENSOR = M × slice_stride
+|  slice 0: [x][y][z]...     |  每个平面 Ns × elem_size
+|  slice 1: ...              |
++----------------------------+
+| Footer (32 B)              |
++----------------------------+ file_size
+
+A.4 文件头 FileHeader（512 字节）
+
+| 偏移 | 长度 | 类型 | 字段 | 规定 |
+|---|---|---|---|---|
+| 0 | 8 | char[8] | magic | `"SATCONT3"` |
+| 8 | 2 | u16 | version_major | 3 |
+| 10 | 2 | u16 | version_minor | 0 |
+| 12 | 4 | u32 | header_size | 512 |
+| 16 | 1 | u8 | endian | 1 = 小端（唯一合法值） |
+| 17 | 1 | u8 | file_kind | 1 SAMPLES / 2 CHEB / 3 INITIAL / 4 CHECKPOINT |
+| 18 | 1 | u8 | frame | 0 ECEF(ITRS) / 1 GCRS / 2 TEME |
+| 19 | 1 | u8 | accuracy_class | 0 = A（hpop-cheb，满足 D3）；2 = C（sgp4/j2/kepler，不保证 D3） |
+| 20 | 4 | u32 | section_count | ≥ 1 |
+| 24 | 8 | u64 | section_dir_offset | 512 |
+| 32 | 4 | u32 | N | 卫星数 |
+| 36 | 4 | u32 | Ns | roundup(N, 64) |
+| 40 | 4 | u32 | M | 本文件的时间片数（SAMPLES）、段数（CHEB）、1（INITIAL/CHECKPOINT） |
+| 44 | 4 | u32 | M_full | 满包时的 M |
+| 48 | 8 | i64 | t0_ns | 本文件第一个时间片/段/状态的时刻 |
+| 56 | 8 | i64 | step_ns | SAMPLES：采样步长；CHEB：段长 L；其他为 0 |
+| 64 | 8 | i64 | run_start_ns | 运行起点（= 初始状态历元） |
+| 72 | 8 | i64 | run_end_ns | 运行终点（不含） |
+| 80 | 8 | u64 | global_index0 | 本文件第一个时间片/段的全局编号 |
+| 88 | 4 | u32 | file_index | 同一产品内从 0 开始的编号 |
+| 92 | 4 | u32 | total_files | 同一产品的文件总数 |
+| 96 | 1 | u8 | elem_type | 0 F64 / 1 Q32（CHEB、INITIAL、CHECKPOINT 必须为 0） |
+| 97 | 1 | u8 | C | 分量数：3（位置）或 6（位置+速度） |
+| 98 | 1 | u8 | comp_mask | bit0–2 = x,y,z；bit3–5 = vx,vy,vz |
+| 99 | 1 | u8 | cheb_degree | CHEB 产品为 7，其他为 0 |
+| 100 | 4 | u32 | flags | bit0 include_missing；bit1 含 STATUS_EVENTS；bit2 日历对齐；bit3 确定性构建 |
+| 104 | 8 | f64 | q_pos | Q32 位置量化步长（m/LSB），F64 时为 0 |
+| 112 | 8 | f64 | q_vel | Q32 速度量化步长（m/s/LSB），F64 时为 0 |
+| 120 | 8 | u64 | plane_stride | Ns × elem_size（字节） |
+| 128 | 8 | u64 | slice_stride | C × plane_stride（字节）；CHEB 为一段的字节数 |
+| 136 | 8 | i64 | package_duration_ns | 包时长 D |
+| 144 | 8 | u64 | geometry_hash | 星座几何规范化后 SHA-256 的前 8 字节（小端解释） |
+| 152 | 8 | u64 | config_hash | 原始 XML 字节 SHA-256 的前 8 字节 |
+| 160 | 8 | u64 | initial_state_hash | 所用 .sinit 文件 SHA-256 的前 8 字节 |
+| 168 | 32 | u8[32] | run_id | 运行参数规范化后的 SHA-256 |
+| 200 | 16 | char[16] | propagator | 如 `"hpop-cheb"` |
+| 216 | 16 | char[16] | backend | 生成该文件的后端，如 `"cuda:sm_89"`、`"cpu"` |
+| 232 | 16 | char[16] | time_scale | `"UTC-POSIX"` |
+| 248 | 32 | char[32] | t0_iso | 如 `"2026-01-01T00:00:00.000Z"` |
+| 280 | 4 | u32 | generator_version | 初始状态生成算法版本 |
+| 284 | 4 | u32 | software_version | (major<<16) \| (minor<<8) \| patch |
+| 288 | 220 | u8[220] | reserved | 全 0 |
+| 508 | 4 | u32 | header_crc32c | 对 0–507 字节计算 |
+
+> 说明：`backend` 只用于溯源；确定性构建下不同后端生成的张量逐字节相同，但文件头的 backend 字段与 header_crc32c 可能不同。逐字节一致性比较以张量段和 TIME_INDEX 为准。
+
+A.5 段目录 SectionEntry（每项 32 字节）
+
+| 偏移 | 长度 | 类型 | 字段 |
+|---|---|---|---|
+| 0 | 4 | u32 | type（见 A.6） |
+| 4 | 2 | u16 | align_log2（6 或 12） |
+| 6 | 2 | u16 | flags（保留，0） |
+| 8 | 8 | u64 | offset（自文件起点） |
+| 16 | 8 | u64 | size（字节，不含对齐填充） |
+| 24 | 4 | u32 | crc32c（对段内容；SAMPLES/CHEB张量填0由片/段CRC保证；STATE在v3.1写真实段CRC） |
+| 28 | 4 | u32 | reserved |
+
+A.6 段定义
+
+0x01 SAT_TABLE（卫星表，SoA）
+
+按以下顺序存放各列，每列长度为 Ns，每列起点 64 字节对齐；补齐部分（i ≥ N）全 0，`global_id` 填 0xFFFFFFFF。
+
+| 列 | 类型 | 含义 |
+|---|---|---|
+| global_id | u32[Ns] | 按 (layer, plane, slot) 字典序分配给所有名义槽位，缺失卫星也占号 |
+| layer | u16[Ns] | 层编号 |
+| plane | u16[Ns] | 轨道面编号 |
+| slot | u16[Ns] | 面内槽位编号 |
+| status0 | u8[Ns] | t0 时刻的状态：0 OK / 1 DAMAGED / 2 MISSING |
+| flags | u8[Ns] | bit0 custom（被编辑并脱离星座规则）；bit1 tle 层 |
+
+卫星列顺序 i 在一次运行的所有文件中必须相同，并按 global_id 升序排列。
+
+0x02 NAME_TABLE
+
+char[24] × Ns，格式为 `L{layer}-P{plane:02}-S{slot:03}`，或 XML/TLE 中给出的名称（超长截断）。
+
+0x03 TIME_INDEX（仅 SAMPLES）
+
+| 子数组 | 类型 | 长度 | 规定 |
+|---|---|---|---|
+| t_ns | i64 | M | 必须等于 t0_ns + j × step_ns；读取方必须校验 |
+| slice_crc | u32 | M | 第 j 片张量字节（slice_stride 字节）的 CRC-32C |
+
+两个子数组之间按 64 字节对齐。
+
+0x04 STATUS_EVENTS（可选）
+
+仅当本文件时间范围内有卫星状态变化时出现，flags bit1 置 1。
+
+| 偏移 | 类型 | 字段 |
+|---|---|---|
+| 0 | u32 | count |
+| 4 | u32 | reserved |
+| 8 起，每项 24 B | u32 sat_index, u8 status, u8[3] 0, i64 from_ns, i64 to_ns | 区间 [from, to)，按 (sat_index, from_ns) 排序，区间不得重叠 |
+
+0x10 DATA_TENSOR（仅 SAMPLES）
+
+- 形状：`[M][C][Ns]`，元素类型由 elem_type 决定；分量顺序按 comp_mask 位序（x, y, z, vx, vy, vz）。
+- 字节偏移公式：
+
+\[
+\text{off}(j,c,i)=\text{tensor\_offset}+j\cdot\text{slice\_stride}+c\cdot\text{plane\_stride}+i\cdot\text{elem\_size}
+\]
+
+- 补齐元素（i ≥ N）与缺失卫星（仅 include_missing 时出现）：Q32 填 `INT32_MIN`（哨兵值），F64 填 quiet NaN `0x7FF8000000000000`。
+- 损坏卫星：正常输出名义轨道坐标，状态见 SAT_TABLE.status0 与 STATUS_EVENTS。
+
+0x11 SEG_INDEX（仅 CHEB）
+
+i64 seg_t0_ns[M]（第 s 段起点）；u32 seg_crc[M]（第 s 段系数字节的 CRC-32C）。
+
+0x12 CHEB_TENSOR（仅 CHEB）
+
+- 形状：`[M][3][D+1][Ns]`，f64，D = cheb_degree = 7；坐标系为 header.frame。
+- 求值：对时刻 t，取 \(s=\lfloor (t-t_{run})/L\rfloor\)，\(\tau = 2(t-t_s)/L-1\in[-1,1)\)，\(\mathbf r(t)=\sum_{n=0}^{D} \mathbf a_{s,n} T_n(\tau)\)；速度 \(\mathbf v=\frac{2}{L}\sum_n \mathbf a_{s,n}T_n'(\tau)\)。
+- 相邻段在边界处位置、速度连续（共享 Hermite 节点）。
+
+0x20 STATE_TENSOR（INITIAL / CHECKPOINT）
+
+`[6][Ns]` f64：x, y, z, vx, vy, vz。INITIAL 文件允许 frame 为 ECEF/GCRS/TEME（读入后统一转 GCRS）；CHECKPOINT 必须为 GCRS。
+
+0x21 PHYS（仅 INITIAL）
+
+`[5][Ns]` f64：质量 kg、阻力面积 m²、Cd、光压面积 m²、Cr。
+
+0x22 LAYER_PATTERN（仅 INITIAL）
+
+每层 128 B：
+
+| 偏移 | 类型 | 字段 |
+|---|---|---|
+| 0 | u16 layer, u8 pattern(0 delta/1 star/2 explicit/3 tle), u8 elem_kind(0 Brouwer–Lyddane 平根) | |
+| 4 | u32 P, u32 S, u32 F | |
+| 16 | f64 a_m, e, inc, raan0, u0, argp | 平根 |
+| 64 | u8[64] | 保留 0 |
+
+0x23 PROVENANCE（仅 INITIAL）
+
+u8[Ns]：0 生成 / 1 被编辑 / 2 自适应调整 / 3 锁定。
+
+0x24 EDIT_LOG（可选，仅 INITIAL）
+
+UTF-8 JSON 数组，每项为一条编辑操作的完整参数和时间戳（操作时间不参与任何哈希）。
+
+A.7 文件尾 Footer（32 字节）
+
+| 偏移 | 类型 | 字段 |
+|---|---|---|
+| 0 | char[4] | `"SEND"` |
+| 4 | u32 | dir_crc32c（段目录的 CRC） |
+| 8 | u64 | file_size |
+| 16 | u64 | tensor_bytes |
+| 24 | u8[8] | 保留 0 |
+
+附录A补充：B仅生成SAMPLES；STATE的3.1 CRC规则见14.2；frame编号为兼容编号，近似性以manifest frame_method为准。
+
+附录B SATNET v1字段字典
+------------------------------------------------------------------------------
+B.2 通用规则（NET-FMT-001）
+
+全部多字节字段小端；整数宽度由 uint32/uint64/int64 明确，不使用平台相关 unsigned long 的大小。浮点为binary64。结构必须按偏移序列化，不依赖C++默认填充。
+
+文件布局：256 B头→UTF-8 JSON metadata→64 B对齐时间索引→4096 B对齐边数据→32 B尾。对齐空隙为0。CRC统一为CRC-32C，与SATC一致；零字节载荷CRC为0。
+
+B.3 文件头（256 B）
+
+| 偏移 | 长度 | 类型 | 字段 | 要求 |
+|---|---:|---|---|---|
+| 0 | 8 | char[8] | magic | `SATNET1\0`（7字符+NUL） |
+| 8 | 2 | u16 | version_major | 1；未知主版本拒绝 |
+| 10 | 2 | u16 | version_minor | 1（本重建完整自描述约定）；旧0保留读取 |
+| 12 | 4 | u32 | header_size | 256 |
+| 16 | 4 | u32 | flags | bit0=1表示未提供源轨道SHA256；其余保留0 |
+| 20 | 4 | u32 | node_count | 卫星+user+ground_station |
+| 24 | 4 | u32 | M | 本包时间片数 |
+| 28 | 4 | u32 | edge_size | 32 |
+| 32 | 8 | u64 | metadata_offset | 256 |
+| 40 | 8 | u64 | metadata_size | 不含对齐填充 |
+| 48 | 8 | u64 | time_index_offset | 64B对齐 |
+| 56 | 8 | u64 | payload_offset | 4096B对齐 |
+| 64 | 8 | i64 | t0_ns | 首片UTC POSIX纳秒 |
+| 72 | 8 | i64 | step_ns | 与源包相同 |
+| 80 | 8 | u64 | global_index0 | 与源包相同 |
+| 88 | 8 | u64 | total_edges | 本文件各片有向边数之和 |
+| 96 | 8 | u64 | file_size | 包含文件尾 |
+| 104 | 32 | u8[32] | source_orbit_sha256 | flags bit0=0时有效；bit0=1时必须全0 |
+| 136 | 116 | u8[116] | reserved | 全0 |
+| 252 | 4 | u32 | header_crc32c | 头0–251字节CRC |
+
+旧数据允许flags=1但必须明确UNBOUND。本重建基线的新图必须在实际生成时写源轨道SHA256并置flags bit0=0；完整绑定规则见第9章。
+
+B.4 元数据（NET-FMT-002）
+
+JSON UTF-8，至少包含：
+- `nodes`：按图id排列的完整节点数组。每节点含id、kind（0卫星/1user/2ground_station）、name、uplink_bps、downlink_bps、antennas。
+- 卫星含gid、layer、plane、slot、P、S；地面节点含ECEF坐标和局部up向量。
+- `satellite_xml_sha256` 与 `ground_xml_sha256`：原始XML字节摘要。
+- `source_hash_available`：与头flags语义一致。
+- 模型假设说明：固定地面、双工占天线规则、按链路容量、工程衰减、是否含处理延迟。
+
+卫星metadata的xyz/up若填0只能是占位，真实位置来自对应轨道片。本重建新图必须独立携带实际policy、模型版本、输入摘要和源轨道精度/坐标说明；使用minor=1标识这套完整自描述约定。旧minor=0见第14章F-MIG，不以补metadata伪装旧数据本来完整。
+
+B.5 时间索引（每片32 B）
+
+字段序列（C++按偏移手工序列化，等价于`<qQQII`）：
+
+| 偏移 | 类型 | 内容 |
+|---|---|---|
+| 0 | i64 | timestamp_ns = t0_ns+j×step_ns |
+| 8 | u64 | edge_offset，绝对文件偏移 |
+| 16 | u64 | edge_count，本片有向边条数 |
+| 24 | u32 | 本片边区CRC32C |
+| 28 | u32 | 保留0 |
+
+时间索引固定M项。各片边区连续，后片起点等于前片起点+32×edge_count；0条边合法，此时偏移可与下一片相同。
+
+B.6 有向边（每条32 B，NET-FMT-003）
+
+| 偏移 | 长度 | 类型 | 字段 |
+|---|---:|---|---|
+| 0 | 4 | u32 | src |
+| 4 | 4 | u32 | dst |
+| 8 | 4 | u32 | delay_us |
+| 12 | 8 | u64 | bandwidth_bps |
+| 20 | 8 | f64 | distance_m |
+| 28 | 4 | u32 | kind：0 ISL、1 接入 |
+
+按偏移手工序列化，等价`<IIIQdI`，大小32。bandwidth在偏移12，不是自然8字节对齐；C++不得直接reinterpret_cast带默认填充的结构。字段 src/dst 为图节点索引，不是global_id。
+
+同片按(src,dst)升序、禁止自环和重复方向边。bandwidth必须>0、distance必须有限且>0；两个方向各写一条，可只有单方向。delay单位为微秒，不是毫秒或纳秒。上层可利用distance复核传播时延。
+
+B.7 文件尾（32 B）
+
+按偏移序列化（等价`<8sIIQQ`）：
+
+| 偏移 | 类型 | 字段 |
+|---|---|---|
+| 0 | char[8] | `NETEND1\0` |
+| 8 | u32 | 时间索引CRC32C |
+| 12 | u32 | metadata CRC32C |
+| 16 | u64 | file_size |
+| 24 | u64 | payload_bytes = total_edges×32 |
+
+读取器必须检查段边界、整数乘法溢出、重叠、文件大小、每片时间/CRC、节点编号、有限数值、边总数与payload长度。不能因为同包两个异常字段互相吻合就跳过范围校验。
+
+附录C DOP853数值表与扩展算法（binary64 hex字面量，C++ constexpr直接编译）
+------------------------------------------------------------------------------
+#pragma once
+// DOP853 12-stage order-8 tableau (coefficients only, from SciPy dop853_coefficients = Hairer DOP853).
+namespace rk {
+inline constexpr double C[12]={0x0.0p+0,0x1.aee6838dae63ap-5,0x1.432ce2aa42cacp-4,0x1.e4c353ff64302p-4,0x1.2068c499c08d9p-2,0x1.5555555555555p-2,0x1.0000000000000p-2,0x1.3b13b13b13b14p-2,0x1.4d74d74d74d75p-1,0x1.3333333333333p-1,0x1.b6db6db6db6dbp-1,0x1.0000000000000p+0};
+inline constexpr double B[12]={0x1.bcc6368d1177cp-5,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x1.1cd1ed2ad5ae2p+2,0x1.e43a845d5ab9fp+0,-0x1.7346ecf96af43p+2,0x1.3ea1df2f0eb98p-2,-0x1.37a028f43b002p-3,0x1.9c657697fe72dp-3,0x1.6e44f50ab6bc2p-5};
+inline constexpr double A[12][12]={
+{0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0},
+{0x1.aee6838dae63ap-5,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0},
+{0x1.432ce2aa42cacp-6,0x1.e4c353ff64302p-5,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0},
+{0x1.e4c353ff64302p-6,0x0.0p+0,0x1.6b927eff8b241p-4,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0},
+{0x1.ee50d7ecde9fap-3,0x0.0p+0,-0x1.c4e3ab5ad1507p-1,0x1.d983d7ac79ef5p-1,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0},
+{0x1.2f684bda12f68p-5,0x0.0p+0,0x0.0p+0,0x1.5ddb63bdb6d36p-3,0x1.00f533f66f19ap-3,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0},
+{0x1.3000000000000p-5,0x0.0p+0,0x0.0p+0,0x1.5cad30f3347edp-3,0x1.ed4b3c332e04dp-5,-0x1.2000000000000p-6,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0},
+{0x1.2fdb8fee78792p-5,0x0.0p+0,0x0.0p+0,0x1.5cf23f6595d72p-3,0x1.b758640dea698p-4,-0x1.f5fcc20fcd32fp-7,0x1.0f1d92efb0b71p-7,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0},
+{0x1.3f8b78b985813p-1,0x0.0p+0,0x0.0p+0,-0x1.ae31bacc6bc8ap+1,-0x1.bc873f08e11f9p-1,0x1.b9793d88d1855p+4,0x1.42770f892ad69p+4,-0x1.5beb4865c42f9p+5,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0},
+{0x1.e9205e321b655p-2,0x0.0p+0,0x0.0p+0,-0x1.3e7a8a34bd27fp+1,-0x1.2e3a9968c93c8p-1,0x1.53ae4a6d655eep+4,0x1.e8ef7b5f258b8p+3,-0x1.0a4e418d711b9p+5,-0x1.4d1b3d9b4a876p-6,0x0.0p+0,0x0.0p+0,0x0.0p+0},
+{-0x1.dfd121f1d399bp-1,0x0.0p+0,0x0.0p+0,0x1.4bed869fb0b9dp+2,0x1.1768702792ea9p+0,-0x1.04cb0e2110c1cp+3,-0x1.2852305e975a8p+4,0x1.6bd4f06cb863ap+4,0x1.3f2e777cf109dp+1,-0x1.85fc60d2b572cp+1,0x0.0p+0,0x0.0p+0},
+{0x1.22fbd3b09fcdcp+1,0x0.0p+0,0x0.0p+0,-0x1.511a963cafe55p+3,-0x1.001c935ac72acp+1,-0x1.1f57c8eff3006p+4,0x1.bf2ea18b58a01p+4,-0x1.6df3a7d1cec13p+1,-0x1.1bee71a9f33a9p+3,0x1.8b89c42c81861p+3,0x1.496ac6253e202p-1,0x0.0p+0}};
+}
+
+扩展0-based：K12=f(t+h,y1)；stage12的A行=B；K13..15使用Cextra[1..3]与Aextra三行。
+namespace rk {
+inline constexpr double Cextra[4]={0x1.0000000000000p+0,0x1.999999999999ap-4,0x1.999999999999ap-3,0x1.8e38e38e38e39p-1};
+inline constexpr double Aextra[3][16]={
+{0x1.cc1fca2ceb148p-5,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x1.03958f21a35b8p-2,-0x1.f84c2c277c23ep-3,-0x1.fcb02555c9defp-4,0x1.39f10ce2d1913p-3,0x1.0cbb69b38652cp-7,0x1.eff840f396ba9p-8,-0x1.0fe8ab4fa4830p-7,0x0.0p+0,0x0.0p+0,0x0.0p+0},
+{0x1.04ca1897bdb63p-5,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x1.cfae9e5f59f45p-6,0x1.b69db017c8cf9p-5,-0x1.c1ef72fc69469p-5,0x0.0p+0,0x0.0p+0,-0x1.c6710eef6e153p-14,0x1.9127a52d32320p-12,-0x1.6500e13e7149bp-12,0x1.21686b20cd989p-3,0x0.0p+0,0x0.0p+0},
+{-0x1.b7309792b6015p-2,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,-0x1.2ca5d44afdc9ap+2,0x1.ebbd2c419eda3p+2,0x1.046a54457171cp+2,0x1.6d49e44edba44p-2,0x0.0p+0,0x0.0p+0,0x0.0p+0,-0x1.6ebeec24871d4p-10,0x1.79482a23f1996p+1,-0x1.24d4a6dca2222p+3,0x0.0p+0}};
+inline constexpr double DenseD[4][16]={
+{-0x1.0db9dcc37c81bp+3,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x1.2228765f0a2ebp-1,-0x1.88d35a1175376p+1,0x1.313cca2e462ecp+1,0x1.0efafd3c0d1bdp+1,-0x1.be2709a4ac0d3p-1,0x1.1ec6a759da28bp+1,0x1.435e4b2f53319p-1,-0x1.6c81218b7f07cp-4,0x1.22604753358b4p+4,-0x1.263a6db60dfa1p+3,-0x1.1be8052a2581dp+2},
+{0x1.4dae269ad44fcp+3,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x1.e49125d57ed67p+7,0x1.4a66a19b8434bp+7,-0x1.768bf81e14e35p+8,-0x1.61d194558cffbp+4,0x1.eef08f933a023p+2,-0x1.eac90d122c30dp+4,-0x1.2aa0d032a0acdp+3,0x1.f64fc65250f7cp+3,-0x1.f23afedecfd53p+4,-0x1.2b4b2806665cap+3,0x1.1e88e43070a10p+5},
+{0x1.3fc2c7303381fp+4,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,-0x1.83098d10f2521p+8,-0x1.7a5b34edf4d39p+7,0x1.07e771c2c6a0cp+9,-0x1.725d68dc06f96p+3,0x1.b8661dd0f8bd7p+2,-0x1.0027a7d67fc68p+0,0x1.8e308023d3331p-1,-0x1.639c3efff56d2p+1,-0x1.e192d4f30c77fp+5,0x1.51481861928c0p+6,0x1.7fc0d95740812p+3},
+{-0x1.9b1a59f97e9a3p+4,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,-0x1.346126bd860c7p+7,-0x1.cf0f0ac990990p+7,0x1.65a39d3b3c602p+8,0x1.759f0d4d83c70p+6,-0x1.2baaa552107abp+5,0x1.a0660a855838ep+6,0x1.dd71d78528cf6p+4,-0x1.5c4484e37f77ep+5,0x1.814c57df82010p+6,-0x1.396b082b5cd1ep+5,-0x1.2b7423e1cb30dp+7}};
+inline constexpr double E5[13]={0x1.adeaea1607e1ap-7,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,-0x1.39a3da55ab5c3p+0,-0x1.fba83bede8a72p-2,0x1.aa149f7eda509p+0,-0x1.66bc9b10e7e71p-2,0x1.56330d0783989p-2,0x1.4f8eb54a31435p-4,-0x1.6e44f50ab6bc2p-6,0x0.0p+0};
+inline constexpr double E3[13]={-0x1.84b641fbfa1f1p-3,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x0.0p+0,0x1.1cd1ed2ad5ae2p+2,0x1.e43a845d5ab9fp+0,-0x1.7346ecf96af43p+2,-0x1.b0d3a26abb716p-2,-0x1.37a028f43b002p-3,0x1.9c657697fe72dp-3,0x1.732080ac040edp-6,0x0.0p+0};
+}
+
+稠密cont0=y0,cont1=y1-y0,cont2=hK0-cont1,cont3=cont1-hK12-cont2；cont[4+m]=h*sum(DenseD[m][j]*Kj)。
+y(s)=cont0+s*(cont1+(1-s)*(cont2+s*(cont3+(1-s)*(cont4+s*(cont5+(1-s)*(cont6+s*cont7))))))。
+F自适应：scale=atol+rtol*max(|y|,|y1|)，e5=sum(E5K)/scale，e3=sum(E3K)/scale；
+S5=sum(e5²),S3=sum(e3²)，全0时err0，否则err=|h|*S5/sqrt(dim*(S5+.01S3))；err<=1接受，步长factor=clamp(.9err^(-1/8),.2,10)。
+固定主步B不需要额外3级；只有F稠密/自适应按相应公式补级，不能在未调用扩展时声称完整算法完成。
+
+附录D orbit_engine诊断协议v1（本版新增，B必须实现）
+------------------------------------------------------------------------------
+D.1 定位、文件和单位
+该协议仅服务测试/诊断，不替代进程内库，也不让satpred通过外部程序做计算。
+所有多字节整数小端，f64为IEEE binary64；禁止直接写C++结构体；所有reserved/gap=0。
+request.json UTF-8无BOM输出（输入可BOM），<=16MiB，字段未知/重复拒绝，路径相对request.json所在目录。
+最少字段：format="orbit-engine-request-1"；run_start_ns/window_t0_ns/step_ns/max_h_ns(int64)；
+global_index0(u64)；M/N/batch/flags(u32)；states_file(string)；env_file(string)；
+prior_failures(array，可空)，每项index(u32)、time_ns(i64)、reason(nonempty UTF-8 string)。
+所有字段必须出现；flags只允许bit0 drag/bit1 third/bit2 relativity/bit3 srp，M/N/batch>=1。
+window_t0=run_start+global_index0*step，checked；step>=1ms、max_h>=1ns；请求片必须满足int64时刻范围。
+prior_failures按index升序不重复且index<N；它导出EngineRequest.failed_indices，首次time/reason不得在续接时覆盖。
+执行内存默认268435456字节；request可选memory_budget(u64>0)、threads(u32>0)，默认2；计入唯一注册表。
+无其它文件名暗约定，无网络下载；OS/打开失败Io，JSON参数Config，二进制不完整/校验错Integrity。
+
+D.2 states_file布局
+64字节Header：
+ offset0 char[8] "ORBSTAT1"；8 u16 major=1；10 u16 minor=0；12 u32 header_size=64；
+ 16 u32 N；20 u32 record_size=88；24 u64 payload_bytes=N*88；32 u32 payload_crc32c；
+ 36 u8[24] reserved=0；60 u32 header_crc32c（覆盖0..59）。
+随后N条88字节AoS记录（按Catalog列序）：
+ 0..47 六个f64 x,y,z,vx,vy,vz（SI，积分参考轴，历元window_t0）；
+ 48..87 五个f64 mass_kg,drag_area_m2,cd,srp_area_m2,cr。
+恰64+N*88字节，无文件尾；N必须等于request.N；每项phys有限且mass>0、其它>=0。
+非failed_indices成员6状态必须finite且半径>RE+100km；已失败成员6项必须全部规范NaN 0x7FF8000000000000。
+永久/临时MISSING不会出现在此文件状态遮蔽中，仍为名义状态。
+
+D.3 env_file布局
+64字节Header：
+ 0 char[8] "ORBENV01"；8 u16 major=1；10 u16 minor=0；12 u32 header_size=64；
+ 16 u64 node_count>=2；24 u32 node_size=248；28 u32 reserved=0；
+ 32 u64 payload_bytes=node_count*248；40 u32 payload_crc32c；44 u8[16] reserved=0；
+ 60 u32 header_crc32c（覆盖0..59）。
+随后node_count条31个小端f64的节点，槽号和字节偏移如下：
+ 0/0 relative_s（相对run_start）；1..9/8..72 R按行优先；10..18/80..144 Rdot按行优先；
+ 19..21/152..168 Sun xyz；22..24/176..192 Moon xyz；25/200 rho_override；
+ 26/208 J2；27/216 J3；28/224 J4；29/232 density_scale；30/240 reserved=+0。
+恰64+node_count*248字节，全部字段finite；relative_s严格递增，不作外推；rho_override=-1或>=0；density_scale>=0。
+此传输表可以是窗口节点，必须覆盖全部实际求值级时刻；内部定位可结合全局节点构造，禁止按批改变表内容。
+诊断输入是已生成环境，不再由引擎自行读取EOP/星历；输入值按协议使用，不从reserved推断新增字段。
+
+D.4 stdout流头
+成功进入传播前输出64字节StreamHeader：
+ 0 char[8] "ORBST01\0"（7字符+NUL）；8 u16 major=1；10 u16 minor=0；12 u32 header_size=64；
+ 16 u32 N；20 u32 Ns=roundup(N,64)；24 u32 M；28 u32 components=6；
+ 32 i64 window_t0_ns；40 i64 step_ns；48 u64 global_index0；56 u32 flags=0；
+ 60 u32 header_crc32c（覆盖0..59）。
+其后恰M个slice帧和一个result帧。所有payload按段流式输出并算CRC，无隐式对齐/gap；控制台日志只stderr。
+
+D.5 frame头与slice帧
+每帧32字节FrameHeader：
+ 0 u32 kind（1 slice，2 result）；4 u32 reserved=0；8 u64 payload_bytes；
+ 16 u64 sequence；24 u32 payload_crc32c；28 u32 header_crc32c（覆盖0..27）。
+slice帧sequence=j（0..M-1）；payload=16字节前缀+6*Ns*8字节：
+ 0 i64 timestamp_ns=window_t0+j*step；8 u64 global_index=global_index0+j；
+ 16起f64[6][Ns]，分量x/y/z/vx/vy/vz，规范padding/失败NaN；不施加MISSING遮蔽。
+CRC覆盖整个payload，非仅tensor；帧按时间连续，无缺失/重复；写端允许先算CRC再写当前有界slice，不缓存全运行。
+
+D.6 result帧
+kind=2，sequence=M，payload先32字节ResultHeader：
+ 0 u32 N；4 u32 failure_count；8 u64 final_states_bytes=N*48；
+ 16 u64 failures_json_bytes；24 u32 reserved=0；28 u32 reserved=0。
+其后f64[N][6] AoS名义末态（失败成员规范NaN），再UTF-8无BOM JSON失败数组。
+失败数组按index排序，长度failure_count；每项index/time_ns/reason，新增失败还含global_index/substep/stage；
+对于请求已存在失败，可仅保留原三个必需字段；新增stage取0..11，接受后检查失败stage=12。
+Failure物理记录与result末态一致；failure_count<=N；JSON控制字符串/大小受预算约束。
+payload_bytes=32+N*48+failures_json_bytes；无额外字节或帧，读端必须检查全部CRC/边界/计数/时间。
+M=1时final_states等于输入有效初态；result发送成功后进程退出0，包括失败集合非空或全部已失败的诊断结果；
+诊断工具只展示引擎结果，不执行satpred任务级“全部Catalog失败”的发布判定；全星任务退出4由satpred执行。
+输入错误/环境不足/输出失败/取消返回相应非零，不发送伪result；已有短stdout流视为不完整，读端Integrity。
+测试至少覆盖正常、M=1、重叠续接、已有失败、新失败、短流、CRC错、未知kind、长度溢出和Windows二进制stdout。
+
+附录E v3.4裁决与变更记录
+------------------------------------------------------------------------------
+E.1 修订目标
+本版根据项目实际用途将v3.3冲突统一为可执行且可验收的需求。不扩大B到高保真或跨平台确定性，不删除F，不放宽原积分精度阈值。
+本版新增诊断协议为local-v2（本项目定义），不是声称恢复某个未知历史格式；SATC/SATNET主/次版本及附录C系数保持不变。
+
+E.2 裁决一览
+01 hash：几何SHA与原始XML SHA分离；依据几何身份和源XML绑定是不同用途。
+02 环境：29物理double+relative_s+reserved=31；依据最小变更保留既有31数值预算。
+03 预算：包含全部可控峰值，batch最小仍不够返回Config；依据不能用规模上限伪造资源承诺。
+04 正交/精度：瞬时R与插值R分别测试；保留原模型/阈值，用实际失败报告，不暗改算法。
+05 状态：真实半开区间、逻辑包覆盖、明确恢复与无采样命中短事件；依据恢复后仍需名义状态。
+06 全星失败：集合为筛后Catalog名义成员；依据missing是业务状态而非数值失败，状态切换不能改变任务数值判定。
+07 诊断：request/states/env/stdout字节冻结；依据独立诊断程序必须有唯一可互操作协议。
+08 CLI：线程/预算通用，dump-defaults只输出，其它未授权注册项不自动开放；依据默认注册不是任意配置入口。
+09 canonical：浮点以带f64前缀JSON字符串编码，类别/转义固定；依据身份字节必须唯一且合法。
+10 G：主机保留全部逻辑候选；图边/时间一致，后端溯源允许整文件SHA不同；依据真实溯源不得被隐藏。
+11 CRC：用Castagnoli oracle，不用zlib.crc32；依据校验多项式不能混淆。
+12 metadata：不继承配置16MiB上限，受边界/预算限制；依据大型合法节点表与恶意长度需要不同错误语义。
+13 覆盖：节点生成和Rdot±0.5s全部预检；内置日月限制不因关闭力项自动消失；依据环境结构固定和输入可追踪。
+14 引用/导出：纠正章节指针，u64 rate用商余数；依据严格往返和显示不得丢原始整数位。
+15 拓扑：权威回调返回Result；旧set接口明确legacy；依据预算/配置失败不可用空集合伪成功。
+16 调用/取消：允许规定的自家调用链，取消统一Io3；依据零参数产品链与“禁止外部计算”应同时成立。
+17 窗口：新增全局k0、失败记录累计，级时间nearest-even标记；依据批不变和失败恢复不得歧义。
+18 快照/成功标记：只读快照再算网络，明确普通并发威胁；成功指针不替代文件验证。
+
+E.3 验收新增项目（与第13章共同必须）
+L0-09：geometry_hash/config_hash分别golden，XML只改名称时geometry不变但config变；B initial_state_hash仍0。
+L0-10：canonical整数/浮点/负零/Unicode码点排序/控制转义一致，至少3完整字节golden。
+L1-13：EnvNode31字段精确偏移，reserved非0拒绝；最少2节点和±0.5s覆盖边界。
+L1-14：附录D各头/帧/数组独立struct解码，短流/CRC/计数/NaN/末态拒绝；诊断与进程内同输入同张量。
+L1-15：非采样边界事件、无命中短事件、尾包恢复、全永久missing但名义成功、全部Catalog数值失败。
+L1-16：窗口M1、batch1/7/64、全局k0重叠丢首片、已有Failure续接和首次stage时间记录。
+L2-08：预算预检与实际预留一致，batch降至1仍不足Config；候选密集超预算不产生伪complete。
+L2-09：u64最大带宽导出商余数精确，delay最大u32固定3位，valid_to裁剪run_end。
+L2-10：dump-defaults不创建run、重复模式Arg；satnet传threads/预算；自家调用链和取消Io3。
+L3-04：CPU/G边payload与时间/计数一致，但actual_backend不同真实保留；两文件独立SOURCE_VERIFIED。
+本版测试缺平台/硬件/参考仍按PASS/FAIL/SKIP/NOT_TESTED/BLOCKED报告，不允许把新增条目无样本记PASS。
+
+E.4 变更声明
+v3.4为完整需求文本；v3.3为来源，不再作为冲突情况下的并行实现选项。
+软件版本和诊断版本按各自规则管理，旧数据不就地覆盖；本次未提供代码或实际测试证据。
+
+文档结束。

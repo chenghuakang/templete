@@ -1,0 +1,21 @@
+{
+  "date": "2026-10-13",
+  "base_release_sha256": "97098cdb9f92d5d0d9281d52f9f8e95f1bd303804aceef002533755f8e233df9",
+  "platform": "Linux/GCC, euid 0",
+  "build": "build_gcc.py (CMake not available)",
+  "suites": {
+    "options_and_event_order": "PASS",
+    "traceroute_unit": "PASS",
+    "hash_time_selftest": "PASS",
+    "upstream_regression": "PASS",
+    "unified_integration": "PASS",
+    "default_flow_clean_env": "PASS"
+  },
+  "refactor_equivalence": "byte-identical outputs (fluid, packet)",
+  "default_24h_result_equals_fixed_release": true,
+  "not_verified": [
+    "CMake/CTest",
+    "Windows/MSVC",
+    "non-root permission failures"
+  ]
+}

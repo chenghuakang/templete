@@ -1,0 +1,26 @@
+[
+ {
+  "model": "fluid",
+  "files": [
+   "business.jsonl",
+   "statistics.jsonl",
+   "traceroute.txt",
+   "traceroute.jsonl",
+   "result.json"
+  ],
+  "byte_identical": true,
+  "effective_config_equal_except_output": true
+ },
+ {
+  "model": "packet",
+  "files": [
+   "business.jsonl",
+   "statistics.jsonl",
+   "traceroute.txt",
+   "traceroute.jsonl",
+   "result.json"
+  ],
+  "byte_identical": true,
+  "effective_config_equal_except_output": true
+ }
+]

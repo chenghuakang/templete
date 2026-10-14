@@ -1,0 +1,9 @@
+{
+ "options_and_event_order": "PASS (43 checks)",
+ "unified_integration": "PASS",
+ "checks": 63,
+ "new_in_this_version": [
+  "--policy accepts a list (a,b,c | a b c | all); each policy runs --times times with indices 1..N, per-policy series.json and <constellation>-policies-comparison.json"
+ ],
+ "environment": "Linux, GCC 15, python3 build_gcc.py; CMake/Windows untested; 24h default flow not re-run in this session"
+}

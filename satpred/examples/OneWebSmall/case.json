@@ -1,0 +1,63 @@
+{
+  "format": "satpred-case-1",
+  "name": "OneWebSmall",
+  "satellites": {
+    "file": "satellites.xml",
+    "sha256": "d2f5451b3d5509c95f8b5f580038c0229ea4f64e5faf8a9230b5e9985e029309",
+    "planes": 1,
+    "satellites_per_plane": 49,
+    "altitude_km": 1200,
+    "inclination_deg": 87.9,
+    "eccentricity": 0,
+    "raan0_deg": 0,
+    "u0_deg": 0
+  },
+  "ground": {
+    "file": "nodes.xml",
+    "sha256": "e8d2bc5f07c921217fbbe318318bacbe0245992736b6623f9fbdc437afd7037b",
+    "nodes": [
+      {
+        "id": "u1",
+        "kind": "user",
+        "latitude_deg": 41.9028,
+        "longitude_deg": 12.4964,
+        "altitude_m": 0,
+        "uplink_bps": 50000000,
+        "downlink_bps": 50000000,
+        "uplink_frequency_hz": 2100000000,
+        "downlink_frequency_hz": 1300000000
+      },
+      {
+        "id": "gw1",
+        "kind": "ground_station",
+        "latitude_deg": -41.9028,
+        "longitude_deg": 167.5036,
+        "altitude_m": 0,
+        "uplink_bps": 50000000,
+        "downlink_bps": 50000000,
+        "uplink_frequency_hz": 2100000000,
+        "downlink_frequency_hz": 1300000000
+      }
+    ]
+  },
+  "network": {
+    "topology": "mesh",
+    "search_range_km": 5000,
+    "access_range_km": 3000,
+    "minimum_elevation_deg": 25,
+    "reference_distance_km": 1000,
+    "distance_exponent": 2,
+    "processing_us": 0
+  },
+  "assumptions": {
+    "rf_model_applied": false,
+    "frequency_interpretation": "nominal carrier frequencies; not spectral bandwidth or bit rate",
+    "not_official_oneweb_rf_parameters": true,
+    "satellite_radio_cap_bps": 10000000000,
+    "satellite_antennas": 6,
+    "user_antennas": 1,
+    "ground_station_antennas": 4,
+    "ground_limit_semantics": "per-directed-link cap, not aggregate node throughput",
+    "raan_and_phase_selection": "unchanged defaults; terminal coverage is not forced"
+  }
+}

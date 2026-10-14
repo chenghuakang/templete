@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<network name="OneWebSmall">
+  <user id="u1" lat_deg="41.9028" lon_deg="12.4964" alt_m="0"
+        uplink_bps="50000000" downlink_bps="50000000" antennas="1"/>
+  <ground_station id="gw1" lat_deg="-41.9028" lon_deg="167.5036" alt_m="0"
+                  uplink_bps="50000000" downlink_bps="50000000" antennas="4"/>
+</network>

@@ -1,0 +1,153 @@
+{
+ "status": "PASS",
+ "checks": 24,
+ "tests": [
+  {
+   "test": "traceroute-unit",
+   "status": "PASS",
+   "exit": 0,
+   "expected": 0,
+   "stderr": ""
+  },
+  {
+   "test": "hash-time-unit",
+   "status": "PASS",
+   "exit": 0,
+   "expected": 0,
+   "stderr": ""
+  },
+  {
+   "test": "fluid",
+   "status": "PASS",
+   "exit": 0,
+   "expected": 0,
+   "stderr": ""
+  },
+  {
+   "test": "delay",
+   "status": "PASS",
+   "exit": 0,
+   "expected": 0,
+   "stderr": ""
+  },
+  {
+   "test": "time-isolation-business.jsonl",
+   "status": "PASS"
+  },
+  {
+   "test": "time-isolation-statistics.jsonl",
+   "status": "PASS"
+  },
+  {
+   "test": "time-isolation-traceroute.txt",
+   "status": "PASS"
+  },
+  {
+   "test": "time-isolation-traceroute.jsonl",
+   "status": "PASS"
+  },
+  {
+   "test": "time-isolation-result.json",
+   "status": "PASS"
+  },
+  {
+   "test": "packet",
+   "status": "PASS",
+   "exit": 0,
+   "expected": 0,
+   "stderr": ""
+  },
+  {
+   "test": "manifest",
+   "status": "PASS",
+   "exit": 0,
+   "expected": 0,
+   "stderr": ""
+  },
+  {
+   "test": "single",
+   "status": "PASS",
+   "exit": 0,
+   "expected": 0,
+   "stderr": ""
+  },
+  {
+   "test": "unknown",
+   "status": "PASS",
+   "exit": 1,
+   "expected": 1,
+   "stderr": "{\"code\":1,\"where\":\"cli\",\"message\":\"unknown/duplicate option wrong\"}\n"
+  },
+  {
+   "test": "tcp",
+   "status": "PASS",
+   "exit": 1,
+   "expected": 1,
+   "stderr": "{\"code\":1,\"where\":\"protocol\",\"message\":\"TCP not implemented\"}\n"
+  },
+  {
+   "test": "negative",
+   "status": "PASS",
+   "exit": 1,
+   "expected": 1,
+   "stderr": "{\"code\":1,\"where\":\"time\",\"message\":\"traceroute-timeout-s must be positive\"}\n"
+  },
+  {
+   "test": "window",
+   "status": "PASS",
+   "exit": 1,
+   "expected": 1,
+   "stderr": "{\"code\":1,\"where\":\"window\",\"message\":\"end outside source range\"}\n"
+  },
+  {
+   "test": "full-trace",
+   "status": "PASS",
+   "exit": 0,
+   "expected": 0,
+   "stderr": ""
+  },
+  {
+   "test": "main-standalone-text",
+   "status": "PASS"
+  },
+  {
+   "test": "standard-golden",
+   "status": "PASS"
+  },
+  {
+   "test": "propagation",
+   "status": "PASS",
+   "exit": 0,
+   "expected": 0,
+   "stderr": ""
+  },
+  {
+   "test": "service-boundary",
+   "status": "PASS",
+   "exit": 0,
+   "expected": 0,
+   "stderr": ""
+  },
+  {
+   "test": "queue",
+   "status": "PASS",
+   "exit": 0,
+   "expected": 0,
+   "stderr": ""
+  },
+  {
+   "test": "no-traffic",
+   "status": "PASS",
+   "exit": 0,
+   "expected": 0,
+   "stderr": ""
+  },
+  {
+   "test": "tamper",
+   "status": "PASS",
+   "exit": 7,
+   "expected": 7,
+   "stderr": "{\"code\":7,\"where\":\"manifest\",\"message\":\"SHA mismatch\"}\n"
+  }
+ ]
+}

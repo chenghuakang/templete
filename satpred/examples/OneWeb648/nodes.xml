@@ -1,0 +1,4 @@
+<network name="fixed terminals">
+<user id="u1" lat_deg="0" lon_deg="-100.3277" alt_m="0" uplink_bps="50000000" downlink_bps="200000000" antennas="1"/>
+<ground_station id="gw1" lat_deg="0.1" lon_deg="-100.2" alt_m="100" uplink_bps="2000000000" downlink_bps="1000000000" antennas="4"/>
+</network>

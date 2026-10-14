@@ -1,0 +1,6 @@
+<constellation name="OneWeb design regression">
+<radio uplink_bps="10000000000" downlink_bps="10000000000" antennas="6"/>
+<layer id="1" pattern="star" P="18" S="36" F="0">
+<orbit alt_km="1200" e="0" inc_deg="87.9" raan0_deg="0" u0_deg="0" argp_deg="0"/>
+<phys mass_kg="150" drag_area_m2="6" cd="2.2" srp_area_m2="6" cr="1.3" source="placeholder"/>
+</layer></constellation>
