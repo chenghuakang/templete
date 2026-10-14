@@ -17,6 +17,7 @@ inline constexpr std::array defaults{
  Default{"policy","none",true},Default{"pair","auto",true},Default{"policy-seed","1",true},
  Default{"lifetime-threshold-s","120",true},Default{"times","1",false},
  // Output naming: <constellation>-<policy>-<tool>-<index>.<ext>
- Default{"constellation","auto",false},Default{"run-index","auto",false},Default{"policy-dump-links","disabled",false}
+ Default{"constellation","auto",false},Default{"run-index","auto",false},Default{"policy-dump-links","disabled",false},
+ Default{"iperf-schema","iperf3-compat-v1",false}
 };
 }

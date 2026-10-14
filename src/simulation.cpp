@@ -93,7 +93,11 @@ namespace unified {
         U trace_count=0,trace_reached=0;
         tr::Result active_trace{};
         unsigned ttl=1,index=0;
-        std::ofstream business,stats,trace_text,trace_json;
+        std::ofstream business,stats,trace_text,trace_json,iperf_json;
+        // iperf3-compat-v1: per-interval accumulators
+        struct IperfInterval{double start_s,end_s,bytes,bits_per_second;};
+        std::vector<IperfInterval>iperf_intervals;
+        long double iperf_total_bytes=0;
         I later(U delta)const{
             need(delta<=U(INT64_MAX-now),7,"time","overflow");
             return now+I(delta);
@@ -326,6 +330,17 @@ namespace unified {
             j["bottleneck_bps"]=bottleneck;
             stats<<j.dump()<<'\n';
             need(bool(stats),3,"stats","write failed");
+            // iperf3-compat-v1: accumulate interval (bytes = delivered in this interval)
+            {
+                double ibytes=double((delivered_bits-report_delivered)/8);
+                iperf_total_bytes+=ibytes;
+                IperfInterval iv;
+                iv.start_s=double(static_cast<long double>(report_begin-begin)/1e9L);
+                iv.end_s=double(static_cast<long double>(now-begin)/1e9L);
+                iv.bytes=ibytes;
+                iv.bits_per_second=double((delivered_bits-report_delivered)/dt);
+                iperf_intervals.push_back(iv);
+            }
             report_generated=generated_bits;
             report_delivered=delivered_bits;
             report_unserved=unserved_bits;
@@ -433,7 +448,8 @@ namespace unified {
             stats.open(out/(names.file("statistics","jsonl")+".part"),std::ios::binary);
             trace_text.open(out/(names.file("traceroute","txt")+".part"),std::ios::binary);
             trace_json.open(out/(names.file("traceroute","jsonl")+".part"),std::ios::binary);
-            need(bool(business)&&bool(stats)&&bool(trace_text)&&bool(trace_json),3,"output","cannot open outputs");
+            iperf_json.open(out/(names.file("iperf","json")+".part"),std::ios::binary);
+            need(bool(business)&&bool(stats)&&bool(trace_text)&&bool(trace_json)&&bool(iperf_json),3,"output","cannot open outputs");
             next_report=later(U(duration(opts,"report-interval-s")));
         }
         J run(){
@@ -551,16 +567,109 @@ namespace unified {
                 r["hop_limit_drop_packets"]=hop_drop;
                 need(generated_packets==delivered_packets+dropped_packets+censored,5,"accounting","packet conservation violated");
             }
+            // iperf3-compat-v1 output
+            {
+                long double dur_s=static_cast<long double>(end-begin)/1e9L;
+                // For fluid model we treat as UDP; packet mode with traffic-protocol=tcp -> tcp
+                bool proto_tcp=packet_mode&&opts.v.count("traffic-protocol")&&opts.v.at("traffic-protocol")=="tcp";
+                J ip=J::obj();
+                ip["schema"]="iperf3-compat-v1";
+                // start block
+                J st=J::obj();
+                J tc=J::obj();
+                tc["cookie"]="hypersim-satnet-1";
+                tc["num_streams"]=1;
+                if(proto_tcp){
+                    J tcp=J::obj();
+                    tcp["mss"]=int(val(opts,"mtu")-52);
+                    st["tcp_mss_default"]=tcp["mss"];
+                    tc["tcp_mss_default"]=tcp["mss"];
+                }
+                tc["omit"]=0;
+                tc["duration"]=double(dur_s);
+                tc["bytes"]=0;
+                tc["blksize"]=proto_tcp?131072:int(payload);
+                tc["num_streams"]=1;
+                st["connected"]=J::arr();
+                {J cn=J::obj();cn["socket"]=1;cn["local_host"]="10.0.0.1";cn["local_port"]=5201;cn["remote_host"]="10.0.0.2";cn["remote_port"]=5201;st["connected"].a.push_back(cn);}
+                st["version"]="iperf 3.x (hypersim-satnet-sim)";
+                st["system_info"]="hypersim-satnet";
+                st["test_start"]=tc;
+                ip["start"]=st;
+                // intervals
+                J ivals=J::arr();
+                for(auto&iv:iperf_intervals){
+                    J entry=J::obj();
+                    J streams=J::arr();
+                    J s=J::obj();
+                    s["socket"]=1;
+                    s["start"]=iv.start_s;
+                    s["end"]=iv.end_s;
+                    s["seconds"]=iv.end_s-iv.start_s;
+                    s["bytes"]=iv.bytes;
+                    s["bits_per_second"]=iv.bits_per_second;
+                    if(proto_tcp){
+                        s["retransmits"]=0;
+                        s["snd_cwnd"]=131072;
+                        s["rtt"]=0;
+                        s["rttvar"]=0;
+                        s["pmtu"]=int(val(opts,"mtu"));
+                        s["omitted"]=false;
+                        s["sender"]=true;
+                    }else{
+                        s["packets"]=0;
+                        s["omitted"]=false;
+                        s["sender"]=true;
+                    }
+                    streams.a.push_back(s);
+                    entry["streams"]=streams;
+                    J sum=J::obj();
+                    sum["start"]=iv.start_s;sum["end"]=iv.end_s;sum["seconds"]=iv.end_s-iv.start_s;
+                    sum["bytes"]=iv.bytes;sum["bits_per_second"]=iv.bits_per_second;
+                    if(proto_tcp){sum["retransmits"]=0;sum["sender"]=true;}
+                    else{sum["packets"]=0;sum["lost_packets"]=0;sum["lost_percent"]=0.0;sum["sender"]=true;}
+                    entry["sum"]=sum;
+                    ivals.a.push_back(entry);
+                }
+                ip["intervals"]=ivals;
+                // end block
+                J en=J::obj();
+                J estreams=J::arr();
+                {
+                    J es=J::obj();
+                    es["id"]=1;es["start"]=0.0;es["end"]=double(dur_s);es["seconds"]=double(dur_s);
+                    es["bytes"]=double(iperf_total_bytes);
+                    es["bits_per_second"]=double(iperf_total_bytes*8/dur_s);
+                    if(proto_tcp){es["retransmits"]=0;es["max_snd_cwnd"]=131072;es["max_rtt"]=0;es["min_rtt"]=0;es["mean_rtt"]=0;es["sender"]=true;}
+                    else{es["packets"]=0;es["lost_packets"]=0;es["lost_percent"]=0.0;es["jitter_ms"]=0.0;es["sender"]=true;}
+                    estreams.a.push_back(es);
+                }
+                en["streams"]=estreams;
+                J esum=J::obj();
+                esum["start"]=0.0;esum["end"]=double(dur_s);esum["seconds"]=double(dur_s);
+                esum["bytes"]=double(iperf_total_bytes);esum["bits_per_second"]=double(iperf_total_bytes*8/dur_s);
+                if(proto_tcp){esum["retransmits"]=0;esum["sender"]=true;}
+                else{esum["packets"]=0;esum["lost_packets"]=0;esum["lost_percent"]=0.0;esum["jitter_ms"]=0.0;esum["sender"]=true;}
+                en["sum"]=esum;
+                J esum_recv=esum;
+                if(!proto_tcp)esum_recv["sender"]=false;
+                else esum_recv["sender"]=false;
+                en["sum_received"]=esum_recv;
+                ip["end"]=en;
+                iperf_json<<ip.dump()<<'\n';
+            }
             business.flush();
             stats.flush();
             trace_text.flush();
             trace_json.flush();
-            need(bool(business)&&bool(stats)&&bool(trace_text)&&bool(trace_json),3,"write","flush failed");
+            iperf_json.flush();
+            need(bool(business)&&bool(stats)&&bool(trace_text)&&bool(trace_json)&&bool(iperf_json),3,"write","flush failed");
             business.close();
             stats.close();
             trace_text.close();
             trace_json.close();
-            for(auto f:{names.file("business","jsonl"),names.file("statistics","jsonl"),names.file("traceroute","txt"),names.file("traceroute","jsonl")})fs::rename(out/(f+".part"),out/f);
+            iperf_json.close();
+            for(auto f:{names.file("business","jsonl"),names.file("statistics","jsonl"),names.file("traceroute","txt"),names.file("traceroute","jsonl"),names.file("iperf","json")})fs::rename(out/(f+".part"),out/f);
             return r;
         }
     };
@@ -819,6 +928,7 @@ namespace unified {
             files["statistics"]=file("statistics","jsonl");
             files["traceroute"]=file("traceroute","txt");
             files["traceroute_json"]=file("traceroute","jsonl");
+            files["iperf"]=file("iperf","json");
             files["result"]=file("result","json");
             files["performance"]=file("performance","json");
             files["effective_config"]=file("effective-config","json");
