@@ -372,11 +372,13 @@ namespace unified {
             // server thread: drain data
             std::thread server_thread([&]{
                 fd_set fds; FD_ZERO(&fds); FD_SET(srv_fd,&fds);
-                struct timeval tv{5,0};
+                struct timeval tv{0,500000};
                 if(::select(srv_fd+1,&fds,nullptr,nullptr,&tv)<=0){done=true;return;}
                 struct sockaddr_in ca{}; socklen_t cl=sizeof(ca);
                 int cli_fd=::accept(srv_fd,reinterpret_cast<struct sockaddr*>(&ca),&cl);
                 if(cli_fd<0){done=true;return;}
+                struct timeval rtv{0,500000};
+                ::setsockopt(cli_fd,SOL_SOCKET,SO_RCVTIMEO,&rtv,sizeof(rtv));
                 std::vector<char> rbuf(65536);
                 for(;;){ssize_t n=::recv(cli_fd,rbuf.data(),rbuf.size(),0);if(n<=0)break;}
                 ::close(cli_fd);
@@ -395,6 +397,8 @@ namespace unified {
                     else std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 }
                 if(!connected){::close(cfd);done=true;return;}
+                struct timeval stv{0,500000};
+                ::setsockopt(cfd,SOL_SOCKET,SO_SNDTIMEO,&stv,sizeof(stv));
                 size_t chunk=std::min<size_t>(262144,std::max<size_t>(4096,static_cast<size_t>(target_bps/8.0/10.0)));
                 std::vector<char> sbuf(chunk,0x41);
                 auto wall_start=std::chrono::steady_clock::now();
@@ -666,7 +670,7 @@ namespace unified {
             // iperf3-compat-v1 output: run real loopback TCP measurement
             {
                 double target_bps=double(delivered_bits/(static_cast<long double>(end-begin)/1e9L));
-                auto meas=run_iperf_loopback(target_bps,2.0);
+                auto meas=run_iperf_loopback(target_bps,0.1);
                 double dur_s=meas.real_dur_s;
                 // For fluid model we treat as UDP; packet mode with traffic-protocol=tcp -> tcp
                 bool proto_tcp=packet_mode&&opts.v.count("traffic-protocol")&&opts.v.at("traffic-protocol")=="tcp";
