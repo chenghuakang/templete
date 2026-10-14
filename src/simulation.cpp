@@ -1067,6 +1067,7 @@ namespace unified {
             manifest["output_sha256"]=J::obj();
             for(auto f:{file("business","jsonl"),file("statistics","jsonl"),file("traceroute","txt"),file("traceroute","jsonl"),file("result","json")})manifest["output_sha256"][f]=hex(filesha(out/f));
             for(auto&[k,v]:files.o)if(k!="manifest"&&!manifest["output_sha256"].o.count(v.str()))manifest["output_sha256"][v.str()]=hex(filesha(out/v.str()));
+            manifest["business_sha256"]=manifest["output_sha256"].at(file("business","jsonl"));
             manifest["warnings"]=J::arr();
             for(auto w:{"MVP subset: not full v3.4 or HyperSim v2.3 acceptance","fluid implements one active flow, not general multi-flow max-min","traceroute uses directed no-queue ICMP model; synthetic IPs, not real host packets","priority-queue scheduler and package buffering: no zero-allocation/mmap guarantee","TCP, Python AST frontend, CUDA/TPS/checkpoint unsupported","simulation identity is MVP identity, not normative canonical","power-loss crash durability not certified"})manifest["warnings"].a.emplace_back(w);
             if(plan)manifest["warnings"].a.emplace_back("handover policy is a god's-eye rule on slice granularity; candidates are all access links present in the input data (upstream satnet exports every visible access link; selection happens here)");
