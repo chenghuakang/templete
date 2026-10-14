@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, json, os, pathlib, subprocess, tempfile
+import argparse, json, math, os, pathlib, struct, subprocess, tempfile, diag_assets
 ap=argparse.ArgumentParser();ap.add_argument('bin');args=ap.parse_args()
 bin=pathlib.Path(args.bin).resolve();suffix='.exe' if os.name=='nt' else ''
 with tempfile.TemporaryDirectory(prefix='satpred test ') as tmp:
@@ -66,4 +66,81 @@ with tempfile.TemporaryDirectory(prefix='satpred test ') as tmp:
     assert (pathlib.Path(tmp)/'bad_state'/'manifest.json').exists() and 'last_success_not_recorded' in p.stderr
     run_env('satnet','--output',pathlib.Path(tmp)/'good_state',*short,env_override={'SATPRED_HOME':str(pathlib.Path(tmp)/'state_ok')})
     assert (pathlib.Path(tmp)/'state_ok'/'last_success.json').exists()
-    print(json.dumps(dict(status='PASS',summary=summary,l2_01_annotation='PASS',l2_01b_fast_path='PASS',state_file_regression='PASS')))
+    # ---- v3.5 external data files: mounting, override effect, error codes (SDD §5.1/§5.2/§7.1/§11.2) ----
+    exsat=str(bin/'examples'/'satellites.xml');exset=str(bin/'examples'/'settings.json')
+    shortrun=['--duration','60','--package','60','--step','10','--start','2026-01-01T00:00:00Z','--threads','2']
+    def spred(out,*extra):
+        return subprocess.run([str(bin/('satpred'+suffix)),'--output',str(out),*shortrun,*map(str,extra)],env=env,capture_output=True,text=True)
+    def manifest(path):
+        return json.loads((pathlib.Path(path)/'manifest.json').read_text())
+    epoch=1767225600;times=[epoch-600+600*i for i in range(151)]
+    ext=pathlib.Path(tmp)/'ext';ext.mkdir()
+    (ext/'eop.csv').write_text('utc_seconds,dut1_s,xp_arcsec,yp_arcsec,tt_minus_utc_s\n'+'\n'.join(f'{t},0.001,0.01,0.02,69.184' for t in times)+'\n')
+    (ext/'eph.csv').write_text('utc_seconds,sun_x,sun_y,sun_z,moon_x,moon_y,moon_z\n'+'\n'.join(f'{t},1.496e11,0,0,3.844e8,0,0' for t in times)+'\n')
+    (ext/'den.csv').write_text('utc_seconds,rho_kg_m3\n'+'\n'.join(f'{t},1e-13' for t in times)+'\n')
+    (ext/'phys.json').write_text(json.dumps({'1':{'mass_kg':160,'cd':2.3,'source':'documented','reference':'regression'}}))
+    (ext/'gravity.json').write_text(json.dumps({'J':{'2':0.00108262617385222}}))
+    (ext/'settings.json').write_text(json.dumps({'eop_csv':'eop.csv','ephemeris_csv':'eph.csv','density_csv':'den.csv','phys_json':'phys.json','gravity_json':'gravity.json'}))
+    (ext/'phys_only.json').write_text(json.dumps({'phys_json':'phys.json'}))
+    (ext/'missing.json').write_text(json.dumps({'eop_csv':'absent.csv'}))
+    (ext/'short_eop.csv').write_text('utc_seconds,dut1_s,xp_arcsec,yp_arcsec,tt_minus_utc_s\n'+'\n'.join(f'{epoch-90000+600*i},0.0,0.0,0.0,69.184' for i in range(3))+'\n')
+    (ext/'short.json').write_text(json.dumps({'eop_csv':'short_eop.csv'}))
+    base=spred(pathlib.Path(tmp)/'ext_base','--config',exsat,'--settings',exset);assert base.returncode==0,base.stderr
+    bm=manifest(pathlib.Path(tmp)/'ext_base')
+    allx=spred(pathlib.Path(tmp)/'ext_all','--config',exsat,'--settings',str(ext/'settings.json'));assert allx.returncode==0,allx.stderr
+    am=manifest(pathlib.Path(tmp)/'ext_all')
+    assert sorted(q['role'] for q in am['inputs']['external_data'])==['density','eop','ephemeris','gravity','phys'],am['inputs']['external_data']
+    assert all(len(q['sha256'])==64 and q['size']>0 for q in am['inputs']['external_data']),'external_data sha256/size recorded'
+    assert [q for q in am['phys_sources'] if q['gid']==1]==[{'gid':1,'source':'documented','reference':'regression','not_used':False}],am['phys_sources']
+    phys=spred(pathlib.Path(tmp)/'ext_phys','--config',exsat,'--settings',str(ext/'phys_only.json'));assert phys.returncode==0,phys.stderr
+    pm=manifest(pathlib.Path(tmp)/'ext_phys')
+    assert pm['products'][0]['sha256']!=bm['products'][0]['sha256'],'phys_json override must change the integrated product'
+    assert pm['inputs']['config_sha256']==bm['inputs']['config_sha256'] and pm['inputs']['settings_sha256']!=bm['inputs']['settings_sha256'],'settings-only change touches settings_sha256 only'
+    assert spred(pathlib.Path(tmp)/'ext_missing','--config',exsat,'--settings',str(ext/'missing.json')).returncode==3,'unreadable external file -> Io(3)'
+    assert spred(pathlib.Path(tmp)/'ext_short','--config',exsat,'--settings',str(ext/'short.json')).returncode==2,'EOP table not covering the window -> Config(2)'
+
+    # ---- v3.5 Walker layer per-satellite overrides (SDD §4.1/§4.2/§11.1) ----
+    src=(bin/'examples'/'satellites.xml').read_text();assert src.count('  </layer>')==1,'default sample must hold exactly one Walker layer'
+    wdir=pathlib.Path(tmp)/'walker';wdir.mkdir()
+    (wdir/'ovr.xml').write_text(src.replace('  </layer>','    <satellite plane="0" slot="1" alt_km="1300" name="OVR1"/>\n  </layer>'))
+    (wdir/'bad.xml').write_text(src.replace('  </layer>','    <satellite plane="3" slot="0"/>\n  </layer>'))
+    (wdir/'dup.xml').write_text(src.replace('  </layer>','    <satellite plane="0" slot="1"/>\n    <satellite plane="0" slot="1"/>\n  </layer>'))
+    ovr=spred(pathlib.Path(tmp)/'walk_ovr','--config',str(wdir/'ovr.xml'),'--settings',exset);assert ovr.returncode==0,ovr.stderr
+    om=manifest(pathlib.Path(tmp)/'walk_ovr');m1=om['catalog']['members'][1]
+    assert (m1['name'],m1['plane'],m1['slot'],m1['gid'])==('OVR1',0,1,1),m1
+    assert om['inputs']['config_sha256']!=bm['inputs']['config_sha256'],'override must enter config_sha256'
+    assert om['run']['run_id']!=bm['run']['run_id'],'override must enter run_id'
+    assert spred(pathlib.Path(tmp)/'walk_bad','--config',str(wdir/'bad.xml'),'--settings',exset).returncode==2,'plane outside Walker grid -> Config(2)'
+    assert spred(pathlib.Path(tmp)/'walk_dup','--config',str(wdir/'dup.xml'),'--settings',exset).returncode==2,'duplicate (plane,slot) -> Config(2)'
+
+
+    # ---- v3.5 orbit_engine appendix-D diagnostic protocol (SDD appendix D) ----
+    ddir=pathlib.Path(tmp)/'diag';req=diag_assets.build_diag(ddir)
+    def diag(request,exit=0):
+        p=subprocess.run([str(bin/('orbit_engine'+suffix)),str(request)],env=env,capture_output=True)
+        assert p.returncode==exit,(request,p.returncode,p.stderr[:400])
+        return p
+    first=diag(req);r=diag_assets.parse_orbst01(first.stdout)
+    assert (r['N'],r['Ns'],r['M'])==(2,64,3) and r['t0_ns']==diag_assets.RUN_START_NS and r['step_ns']==10**9 and r['global_index0']==0,r
+    assert [s['global_index'] for s in r['slices']]==[0,1,2] and [s['t_ns'] for s in r['slices']]==[diag_assets.RUN_START_NS+i*10**9 for i in range(3)]
+    assert r['slices'][0]['q']==[7.0e6,0.0,0.0,0.0,7500.0,0.0],'initial state echoed verbatim'
+    for s in r['slices']:
+        assert all(math.isfinite(v) for v in s['q']) and math.sqrt(sum(v*v for v in s['q'][:3]))>6.5e6,'finite, physical state'
+    assert r['result']['failures']==0 and json.loads(r['result']['json'])==[],r['result']
+    assert diag(req).stdout==first.stdout,'diagnostic stream must be reproducible'
+    # window continuation: resume at global_index0=1 from the propagated state while keeping a prior failure.
+    nan=float('nan');st=diag_assets.default_states()
+    req2=diag_assets.build_diag(ddir/'cont',m=2,global_index0=1,states=[(tuple(r['slices'][1]['q']),st[0][1]),((nan,)*6,st[1][1])],
+                                prior_failures=[{'index':1,'time_ns':diag_assets.RUN_START_NS+500000000,'reason':'verify'}])
+    r2=diag_assets.parse_orbst01(diag(req2).stdout)
+    assert [s['global_index'] for s in r2['slices']]==[1,2] and r2['t0_ns']==diag_assets.RUN_START_NS+10**9,r2
+    assert struct.pack('<6d',*r2['slices'][0]['q'])==struct.pack('<6d',*r['slices'][1]['q']),'window continuation must overlap bit-exactly'
+    fj=json.loads(r2['result']['json'])
+    assert r2['result']['failures']==1 and len(fj)==1 and fj[0]['index']==1 and fj[0]['reason']=='verify' and 'global_index' not in fj[0],fj
+    assert subprocess.run([str(bin/('orbit_engine'+suffix))],env=env,capture_output=True).returncode==1,'no request -> Arg(1)'
+    assert subprocess.run([str(bin/('orbit_engine'+suffix)),str(ddir/'absent.json')],env=env,capture_output=True).returncode==3,'missing request -> Io(3)'
+    bad=bytearray((ddir/'states.sbin').read_bytes());bad[100]^=1;(ddir/'corrupt.sbin').write_bytes(bytes(bad))
+    (ddir/'corrupt.json').write_text(json.dumps(dict(json.loads(req.read_text()),states_file='corrupt.sbin')))
+    diag(ddir/'corrupt.json',exit=7)
+
+    print(json.dumps(dict(status='PASS',summary=summary,l2_01_annotation='PASS',l2_01b_fast_path='PASS',state_file_regression='PASS',external_data='PASS',walker_override='PASS',orbit_engine_appendix_d='PASS')))
