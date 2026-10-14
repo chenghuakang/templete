@@ -28,7 +28,7 @@
 3. 文档第11章 canonical JSON 与 run_id：当前明确采用 MVP 身份，而非标准身份；manifest 写警告。geometry/config 原始摘要分离已实现。
 4. 内存：当前按包缓冲轨道/图，并保守预检部分缓冲和候选。batch 仅解析，不改变规划。不承诺覆盖所有自有分配峰值；并非文档严格有界内存实现。大包可以 Config 拒绝，即使正式版本应能够流式接受。
 5. Result<T> 错误通道、全部指定命名空间/源码分层：当前共享库内部使用 Err 异常，由 application 统一转换。XML 错误没有完整行列定位；部分 CLI 数值错误归类仍为 Config。
-6. 独立 orbit_engine 附录D诊断协议：该可执行入口明确返回 Arg，没有伪造成功流。satpred 的库内 DOP853 实际传播已实现。
+6. 独立 orbit_engine 附录D诊断协议：已实现。orbit_engine request.json 解析严格字段（未知/重复/缺失拒绝）、states_file(ORBSTAT1)/env_file(ORBENV01) 头与 CRC/边界校验、stdout ORBST01 流（StreamHeader + M 个 slice 帧 + result 帧，全帧 CRC）；支持 M=1、prior_failures 首次 time/reason 保留、新失败 global_index/substep/stage、窗口续接重叠片逐位一致；诊断输入为已生成环境，不重读 EOP/星历。
 7. 全默认值注册表、schema、build_info 嵌入、phys_sources/完整外部数据记录、完整 manifest 字段、simulation_defaults.json：尚不完整。effective_config 主要存 CLI 文本，而非全部规范类型。
 8. CUDA G、全 F 功能：未实现。cuda 返回 Device，auto 选择 CPU；未来义务见完整需求副本。
 9. reader 并非完整恶意输入安全实现：规范保留字段/UTF8 控制字符/所有未知段边界/未知minor与legacy标签、极端有符号时刻溢出、JSON模型完整语义仍需加强。不得对不可信文件宣称已安全审计。

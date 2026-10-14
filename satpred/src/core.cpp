@@ -1007,6 +1007,8 @@ std::vector<Event>events;
 State y;
 bool failed=false;
 I failuretime=0;
+I fk=-1;
+int fsub=-1,fstage=-1;
 std::string reason;
 }
 ;
@@ -1579,6 +1581,7 @@ struct Env{
 Mat R,D;
 V sun,moon;
 double rho=-1;
+double j2=1.08262617385222e-3,j3=-2.53241051856772e-6,j4=-1.61989759991697e-6,scale=1;
 }
 ;
 struct Environment{
@@ -1598,6 +1601,10 @@ auto sm=sunmoon(U,s);
 e.sun=sm.first;
 e.moon=sm.second;
 e.rho=s.denT.empty()?-1.0:denAt(s,U);
+e.j2=s.j2;
+e.j3=s.j3;
+e.j4=s.j4;
+e.scale=s.scale;
 return e;
 }
 Env at(double rel)const{
@@ -1617,6 +1624,10 @@ e.D.a[k]=a.D.a[k]+f*(b.D.a[k]-a.D.a[k]);
 e.sun=a.sun+(b.sun-a.sun)*f;
 e.moon=a.moon+(b.moon-a.moon)*f;
 e.rho=a.rho+f*(b.rho-a.rho);
+e.j2=a.j2+f*(b.j2-a.j2);
+e.j3=a.j3+f*(b.j3-a.j3);
+e.j4=a.j4+f*(b.j4-a.j4);
+e.scale=a.scale+f*(b.scale-a.scale);
 return e;
 }
 }
@@ -1637,7 +1648,7 @@ double n=norm(rf),z=rf.z/n;
 V af=rf*(-mu/(n*n*n));
 double P0=1,P1=z,D0=0,D1=1;
 double J[]={
-0,0,s.j2,s.j3,s.j4}
+0,0,e.j2,e.j3,e.j4}
 ;
 for(int k=2;k<=4;++k){
 double P=((2*k-1)*z*P1-(k-1)*P0)/k,D=((2*k-1)*(P1+z*D1)-(k-1)*D0)/k,f=mu*J[k]*std::pow(RE,k)/std::pow(n,k+3),g=(k+1)*P+z*D;
@@ -1664,7 +1675,7 @@ if(s.rel)a=a+(r*(4*mu/n-dot(v,v))+v*(4*dot(r,v)))*(mu/(299792458.0*299792458.0*n
 if(s.drag){
 V vr=e.R*v+e.D*r;
 double rho=e.rho>=0?e.rho:density(n-RE);
-a=a+e.R.tr()*(vr*(-.5*rho*s.scale*p.cd*p.drag/p.mass*norm(vr)));
+a=a+e.R.tr()*(vr*(-.5*rho*e.scale*p.cd*p.drag/p.mass*norm(vr)));
 }
 if(s.srp){
 V u=e.sun*(1/norm(e.sun));
@@ -1687,7 +1698,8 @@ double x;
 std::memcpy(&x,&v,8);
 return x;
 }
-void advance(std::vector<Sat>&s,U k,I step,I maxh,Environment&env){
+template<class E>
+void advance(std::vector<Sat>&s,U k,I step,I maxh,E&env){
 U sub=(U(step)+U(maxh)-1)/U(maxh);
 need(sub<=10000000,2,"integrator","substep count resource limit");
 double h=double(step)*1e-9/double(sub);
@@ -1731,6 +1743,9 @@ if(!valid(y1))bad=12;
 if(bad>=0){
 a.failed=true;
 a.failuretime=env.start+I(std::nearbyint((t+(bad==12?1:rk::C[bad])*h)*1e9));
+a.fk=I(k)+1;
+a.fsub=int(j);
+a.fstage=bad;
 a.reason="nonfinite_or_radius_below_100km";
 a.y.q.fill(qnan());
 }
@@ -3451,6 +3466,220 @@ rejected=true;
 need(rejected,5,"test","duplicate JSON");
 std::cout<<"SELFTEST_OK\n";
 }
+struct DiagEnv{
+std::vector<std::array<double,31>> n;
+I start=0;
+Settings s;
+Env at(double rel)const{
+need(!n.empty()&&rel>=n.front()[0]&&rel<=n.back()[0],2,"env_file","evaluation time outside diagnostic env table");
+size_t k=0;
+while(k+1<n.size()&&n[k+1][0]<=rel)++k;
+Env e;
+double f=k+1>=n.size()?0:(rel-n[k][0])/(n[k+1][0]-n[k][0]);
+auto&a=n[k];
+auto&b=k+1>=n.size()?n[k]:n[k+1];
+for(int i=0;i<9;++i)e.R.a[i]=a[size_t(1+i)]+f*(b[size_t(1+i)]-a[size_t(1+i)]);
+for(int i=0;i<9;++i)e.D.a[i]=a[size_t(10+i)]+f*(b[size_t(10+i)]-a[size_t(10+i)]);
+e.sun={a[19]+f*(b[19]-a[19]),a[20]+f*(b[20]-a[20]),a[21]+f*(b[21]-a[21])};
+e.moon={a[22]+f*(b[22]-a[22]),a[23]+f*(b[23]-a[23]),a[24]+f*(b[24]-a[24])};
+e.rho=a[25]+f*(b[25]-a[25]);
+e.j2=a[26]+f*(b[26]-a[26]);
+e.j3=a[27]+f*(b[27]-a[27]);
+e.j4=a[28]+f*(b[28]-a[28]);
+e.scale=a[29]+f*(b[29]-a[29]);
+return e;
+}
+}
+;
+bool isqnan(double x){
+U v;
+std::memcpy(&v,&x,8);
+return v==0x7ff8000000000000ULL;
+}
+int orbitEngine(int argc,char**argv){
+need(argc==2,1,"orbit_engine","usage: orbit_engine request.json");
+fs::path rp=fs::u8path(argv[1]);
+J q=json(readtext(rp));
+need(q.type==J::Obj,2,"request","object");
+static const std::set<std::string> allow={
+"format","run_start_ns","window_t0_ns","step_ns","max_h_ns","global_index0","M","N","batch","flags","states_file","env_file","prior_failures","memory_budget","threads"}
+;
+for(auto&kv:q.o)need(allow.count(kv.first),2,"request","unknown "+kv.first);
+for(auto k:{
+"format","run_start_ns","window_t0_ns","step_ns","max_h_ns","global_index0","M","N","batch","flags","states_file","env_file","prior_failures"}
+)need(q.o.count(k),2,"request","missing "+std::string(k));
+need(q.at("format").str()=="orbit-engine-request-1",2,"request","format");
+I runstart=q.at("run_start_ns").i(),wt0=q.at("window_t0_ns").i(),step=q.at("step_ns").i(),maxh=q.at("max_h_ns").i();
+U gi0=q.at("global_index0").u(),M=q.at("M").u(),N=q.at("N").u(),batch=q.at("batch").u(),flags=q.at("flags").u();
+U budget=q.o.count("memory_budget")?q.at("memory_budget").u():268435456;
+U threads=q.o.count("threads")?q.at("threads").u():2;
+need(M>=1&&N>=1&&batch>=1,2,"request","M/N/batch>=1");
+need(budget>0&&threads>0&&threads<=UINT32_MAX,2,"request","budget/threads range");
+need(step>=1000000&&maxh>=1,2,"request","step>=1ms,max_h>=1ns");
+need(flags<16,2,"request","flags bits 0..3 only");
+need(gi0<=U(INT64_MAX/step),7,"request","global_index0 overflow");
+need(wt0==runstart+I(gi0)*step,2,"request","window_t0 != run_start+global_index0*step");
+struct Fail{U index;I time;std::string reason;}
+;
+std::vector<Fail> prior;
+{
+const J& pf=q.at("prior_failures");
+need(pf.type==J::Arr,2,"request","prior_failures array");
+bool first=true;
+U last=0;
+for(auto&e:pf.a){
+need(e.type==J::Obj,2,"request","prior failure object");
+for(auto&kv:e.o)need(kv.first=="index"||kv.first=="time_ns"||kv.first=="reason",2,"request","unknown prior key");
+for(auto k:{
+"index","time_ns","reason"}
+)need(e.o.count(k),2,"request","missing prior key");
+U idx=e.at("index").u();
+need(idx<N&&(first||idx>last),2,"request","prior index order/range");
+last=idx;
+first=false;
+std::string r=e.at("reason").str();
+need(!r.empty(),2,"request","empty reason");
+prior.push_back({idx,e.at("time_ns").i(),r});
+}
+}
+std::set<U> pri;
+for(auto&f:prior)pri.insert(f.index);
+fs::path base=rp.parent_path();
+B sb=load(base/fs::u8path(q.at("states_file").str()),budget);
+need(sb.size()>=64&&gs(sb,0,8)=="ORBSTAT1"&&get(sb,8,2)==1&&get(sb,10,2)==0&&get(sb,12,4)==64,7,"states_file","header");
+need(get(sb,16,4)==N&&get(sb,20,4)==88&&get(sb,24,8)==N*88,7,"states_file","N/record size");
+need(sb.size()==64+N*88,7,"states_file","file size");
+zero(sb,36,60);
+need(get(sb,60,4)==crc(sb.data(),60)&&get(sb,32,4)==crc(sb.data()+64,size_t(N*88)),7,"states_file","crc");
+std::vector<Sat> sats;
+sats.resize(size_t(N));
+for(U i=0;i<N;++i){
+Sat&s=sats[size_t(i)];
+U o=64+i*88;
+for(int c=0;c<6;++c)s.y.q[size_t(c)]=gf(sb,o+U(c)*8);
+s.phys.mass=gf(sb,o+48);
+s.phys.drag=gf(sb,o+56);
+s.phys.cd=gf(sb,o+64);
+s.phys.srp=gf(sb,o+72);
+s.phys.cr=gf(sb,o+80);
+need(std::isfinite(s.phys.mass)&&s.phys.mass>0&&std::isfinite(s.phys.drag)&&s.phys.drag>=0&&std::isfinite(s.phys.cd)&&s.phys.cd>=0&&std::isfinite(s.phys.srp)&&s.phys.srp>=0&&std::isfinite(s.phys.cr)&&s.phys.cr>=0,2,"states_file","invalid phys");
+s.gid=uint32_t(i);
+s.name="E"+std::to_string(i);
+bool failed=pri.count(i)!=0;
+for(int c=0;c<6;++c){
+double v=s.y.q[size_t(c)];
+if(failed)need(isqnan(v),2,"states_file","failed member must be canonical NaN");
+else need(std::isfinite(v)&&norm(s.y.r())>RE+100000,2,"states_file","invalid initial state");
+}
+}
+for(auto&f:prior){
+sats[size_t(f.index)].failed=true;
+sats[size_t(f.index)].failuretime=f.time;
+sats[size_t(f.index)].reason=f.reason;
+}
+B eb=load(base/fs::u8path(q.at("env_file").str()),budget);
+need(eb.size()>=64&&gs(eb,0,8)=="ORBENV01"&&get(eb,8,2)==1&&get(eb,10,2)==0&&get(eb,12,4)==64,7,"env_file","header");
+U nc=get(eb,16,8);
+need(nc>=2&&get(eb,24,4)==248&&get(eb,28,4)==0&&get(eb,32,8)==nc*248,7,"env_file","node layout");
+need(eb.size()==64+nc*248,7,"env_file","file size");
+zero(eb,44,60);
+need(get(eb,60,4)==crc(eb.data(),60)&&get(eb,40,4)==crc(eb.data()+64,size_t(nc*248)),7,"env_file","crc");
+DiagEnv denv;
+denv.n.resize(size_t(nc));
+for(U i=0;i<nc;++i){
+auto&z=denv.n[size_t(i)];
+for(int c=0;c<31;++c)z[size_t(c)]=gf(eb,64+i*248+U(c)*8);
+for(int c=0;c<31;++c)need(std::isfinite(z[size_t(c)]),2,"env_file","nonfinite node field");
+need(i==0||z[0]>denv.n[size_t(i-1)][0],2,"env_file","relative_s not strictly increasing");
+need(z[25]==-1||z[25]>=0,2,"env_file","rho_override");
+need(z[29]>=0,2,"env_file","density_scale");
+need(z[30]==0,7,"env_file","reserved");
+}
+denv.start=runstart;
+denv.s.drag=(flags&1)!=0;
+denv.s.third=(flags&2)!=0;
+denv.s.rel=(flags&4)!=0;
+denv.s.srp=(flags&8)!=0;
+#ifdef _OPENMP
+omp_set_num_threads(int(threads));
+#endif
+auto wr=[&](const uint8_t*p,size_t n){
+std::cout.write(reinterpret_cast<const char*>(p),std::streamsize(n));
+}
+;
+auto emit=[&](const B&pl,U kind,U seq){
+B f(32);
+put(f,0,kind,4);
+put(f,4,0,4);
+put(f,8,pl.size(),8);
+put(f,16,seq,8);
+put(f,24,crc(pl.data(),pl.size()),4);
+put(f,28,crc(f.data(),28),4);
+wr(f.data(),f.size());
+wr(pl.data(),pl.size());
+}
+;
+U Ns=align(N,64);
+B h(64);
+ps(h,0,"ORBST01",8);
+put(h,8,1,2);
+put(h,10,0,2);
+put(h,12,64,4);
+put(h,16,N,4);
+put(h,20,Ns,4);
+put(h,24,M,4);
+put(h,28,6,4);
+put(h,32,U(wt0),8);
+put(h,40,U(step),8);
+put(h,48,gi0,8);
+put(h,56,0,4);
+put(h,60,crc(h.data(),60),4);
+wr(h.data(),h.size());
+for(U j=0;j<M;++j){
+safe();
+if(j>0)advance(sats,gi0+j-1,step,maxh,denv);
+B pl(size_t(16+6*Ns*8));
+put(pl,0,U(wt0+I(j)*step),8);
+put(pl,8,gi0+j,8);
+for(U c=0;c<6;++c)for(U i=0;i<Ns;++i){
+double v=qnan();
+if(i<N&&!sats[size_t(i)].failed)v=sats[size_t(i)].y.q[size_t(c)];
+pf(pl,16+c*Ns*8+i*8,v);
+}
+emit(pl,1,j);
+}
+J arr=J::arr();
+for(U i=0;i<N;++i){
+auto&s=sats[size_t(i)];
+if(!s.failed)continue;
+J o=J::obj();
+o["index"]=i;
+o["time_ns"]=s.failuretime;
+o["reason"]=s.reason;
+if(!pri.count(i)&&s.fk>=0){
+o["global_index"]=U(s.fk);
+o["substep"]=s.fsub;
+o["stage"]=s.fstage;
+}
+arr.a.push_back(o);
+}
+std::string js=arr.dump();
+B rp2(size_t(32+N*48+js.size()));
+put(rp2,0,N,4);
+put(rp2,4,arr.a.size(),4);
+put(rp2,8,N*48,8);
+put(rp2,16,js.size(),8);
+put(rp2,24,0,4);
+put(rp2,28,0,4);
+for(U i=0;i<N;++i)for(int c=0;c<6;++c){
+double v=sats[size_t(i)].failed?qnan():sats[size_t(i)].y.q[size_t(c)];
+pf(rp2,32+i*48+U(c)*8,v);
+}
+std::memcpy(rp2.data()+32+N*48,js.data(),js.size());
+emit(rp2,2,M);
+std::cout.flush();
+return 0;
+}
 int mainapp(const std::string&app,int argc,char**argv){
 std::signal(SIGINT,signal_handler);
 std::signal(SIGTERM,signal_handler);
@@ -3462,7 +3691,7 @@ if(app=="satdemo"){
 demo(argc,argv);
 return 0;
 }
-if(app=="orbit_engine")fail(1,"orbit_engine","diagnostic protocol appendix D not implemented in this MVP; library propagation is implemented");
+if(app=="orbit_engine")return orbitEngine(argc,argv);
 auto o=options(app,argc,argv);
 if(o.m.count("selftest")){
 selftest();
@@ -3475,7 +3704,7 @@ return 0;
 if(o.m.count("help")){
 std::cout<<app<<" 0.1.0-mvp\n";
 for(auto&kv:defaults(app))std::cout<<"  --"<<kv.first<<" (default "<<kv.second<<")\n";
-std::cout<<"External eop/ephemeris/density CSV, gravity/phys JSON overrides are supported; CUDA and orbit_engine appendix-D diagnostic protocol are unsupported; see docs.\n";
+std::cout<<"External eop/ephemeris/density CSV, gravity/phys JSON overrides and the orbit_engine appendix-D diagnostic protocol are supported; CUDA is unsupported; see docs.\n";
 return 0;
 }
 if(o.m.count("dump-defaults")){
