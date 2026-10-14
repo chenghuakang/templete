@@ -25,6 +25,7 @@ inline constexpr std::array defaults{
  Default{"report-interval-s","1","Seconds","s","Measure",">0",true},
  Default{"probe-packet-bytes","60","U64","B","Measure","28..9000",true},
  Default{"probe-serialization","enabled","Enum","","Measure","enabled|disabled",true},
+ Default{"satellite-processing-us","0","U64","us","Network",">=0",true},
  Default{"memory-budget-bytes","268435456","U64","B","Resource",">=16777216",false},
  Default{"host-io-delay-ms","0","U64","ms","Time","0..10000",false},
  // Handover policy (god's-eye USS/GSS selection for one user/ground pair).

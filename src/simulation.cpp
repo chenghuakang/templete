@@ -221,11 +221,12 @@ namespace unified {
                 flow_path=route(src);
                 bottleneck=flow_path.empty()?0:UINT64_MAX;
                 path_delay=0;
+                U hop_processing_ns=mul(val(opts,"satellite-processing-us"),1000);
                 for(size_t i=1;i<flow_path.size();++i){
                     auto l=tr::edge(graph,flow_path[i-1],flow_path[i]);
                     need(bool(l),5,"route","edge absent");
                     bottleneck=std::min(bottleneck,l->capacity_bps);
-                    path_delay=add(path_delay,l->delay_ns);
+                    path_delay=add(path_delay,add(l->delay_ns,hop_processing_ns));
                 }
                 if(old!=flow_path){
                     J p=J::obj();
@@ -543,7 +544,7 @@ namespace unified {
             else if(e.kind==EventKind::FlowEnd)arrival_rate=std::max<long double>(0,arrival_rate-e.rate);
             else if(e.kind==EventKind::ProbeComplete)commit_probe(e.probe);
         }
-        public: Simulation(Options o,Topology&i,OutputNames n,fs::path output,I first,I last):opts(std::move(o)),input(i),names(std::move(n)),out(std::move(output)),begin(first),end(last),now(first),next_topology(first),next_report(first),next_probe(first),report_begin(first),src(endpoint(i.nodes,opts.v.at("traffic-src"))),dst(endpoint(i.nodes,opts.v.at("traffic-dst"))),offer(val(opts,"traffic-rate-bps")),payload(val(opts,"traffic-packet-bytes")),capacity(val(opts,"queue-capacity")),maxh(val(opts,"max-hops")),budget(val(opts,"memory-budget-bytes")),packet_mode(opts.v.at("bandwidth-model")=="packet"),source{first,last,[&i](I t){return i.at(t);},[&i,last](I t){auto next=i.next(t);return next&&*next<last?next:std::optional<I>{};}},trace_config{unsigned(maxh),unsigned(val(opts,"traceroute-probes")),U(duration(opts,"traceroute-timeout-s")),unsigned(val(opts,"probe-packet-bytes")),56,opts.v.at("probe-serialization")=="enabled"},tracer(source,trace_config){
+        public: Simulation(Options o,Topology&i,OutputNames n,fs::path output,I first,I last):opts(std::move(o)),input(i),names(std::move(n)),out(std::move(output)),begin(first),end(last),now(first),next_topology(first),next_report(first),next_probe(first),report_begin(first),src(endpoint(i.nodes,opts.v.at("traffic-src"))),dst(endpoint(i.nodes,opts.v.at("traffic-dst"))),offer(val(opts,"traffic-rate-bps")),payload(val(opts,"traffic-packet-bytes")),capacity(val(opts,"queue-capacity")),maxh(val(opts,"max-hops")),budget(val(opts,"memory-budget-bytes")),packet_mode(opts.v.at("bandwidth-model")=="packet"),source{first,last,[&i](I t){return i.at(t);},[&i,last](I t){auto next=i.next(t);return next&&*next<last?next:std::optional<I>{};}},trace_config{unsigned(maxh),unsigned(val(opts,"traceroute-probes")),U(duration(opts,"traceroute-timeout-s")),unsigned(val(opts,"probe-packet-bytes")),56,opts.v.at("probe-serialization")=="enabled",U(val(opts,"satellite-processing-us")*1000)},tracer(source,trace_config){
             business.open(out/(names.file("business","jsonl")+".part"),std::ios::binary);
             stats.open(out/(names.file("statistics","jsonl")+".part"),std::ios::binary);
             trace_text.open(out/(names.file("traceroute","txt")+".part"),std::ios::binary);

@@ -106,6 +106,7 @@ namespace unified {
         need(val(o,"queue-capacity")>=1&&val(o,"queue-capacity")<=UINT32_MAX,1,"queue","range");
         need(val(o,"max-hops")>=1&&val(o,"max-hops")<=32&&val(o,"traceroute-probes")>=1&&val(o,"traceroute-probes")<=3,1,"trace","bounds");
         need(val(o,"probe-packet-bytes")>=28&&val(o,"probe-packet-bytes")<=9000,1,"probe bytes","range");
+        need(val(o,"satellite-processing-us")<=1000000,1,"processing","satellite processing range (0..1000000 us)");
         need(o.v.at("probe-serialization")=="enabled"||o.v.at("probe-serialization")=="disabled",1,"probe serialization","enabled|disabled");
         need(val(o,"memory-budget-bytes")>=16777216,1,"budget","minimum 16 MiB");
         need(val(o,"host-io-delay-ms")<=10000,1,"test delay","range");

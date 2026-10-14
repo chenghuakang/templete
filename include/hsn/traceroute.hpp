@@ -22,7 +22,7 @@ struct Source{
     std::function<Graph(Ns)> at;
     std::function<std::optional<Ns>(Ns)> next_transition;
 };
-struct Config{unsigned max_hops=32,probes=3;U timeout_ns=5000000000ULL;unsigned packet_bytes=60,icmp_bytes=56;bool serialization=true;};
+struct Config{unsigned max_hops=32,probes=3;U timeout_ns=5000000000ULL;unsigned packet_bytes=60,icmp_bytes=56;bool serialization=true;U processing_ns=0;};
 enum class Status{Reply,Timeout,Censored};
 struct Probe{Status status=Status::Timeout;unsigned ttl=0,index=0;Ns sent_ns=0,finished_ns=0;std::optional<Node>responder;std::optional<U>rtt_ns;bool destination_reply=false;std::string detail;};
 struct Row{unsigned ttl;std::vector<Probe>probes;};
@@ -65,6 +65,8 @@ class Engine{
             }
         }
         Ns arrival=after(t,current->delay_ns);
+        // Each traversed node adds its satellite processing time; the end-to-end value is read as a clock difference.
+        if(cfg.processing_ns)arrival=after(arrival,cfg.processing_ns);
         if(arrival>deadline)return{false,false,deadline,"propagation_timeout"};
         if(arrival>=source.end)return{false,true,source.end,"run_end_during_propagation"};
         return{true,false,arrival,""};
