@@ -3756,7 +3756,8 @@ return 0;
 if(o.m.count("help")){
 std::cout<<app<<" 0.1.0-mvp\n";
 for(auto&kv:defaults(app))std::cout<<"  --"<<kv.first<<" (default "<<kv.second<<")\n";
-std::cout<<"External eop/ephemeris/density CSV, gravity/phys JSON overrides and the orbit_engine appendix-D diagnostic protocol are supported; CUDA is unsupported; see docs.\n";
+std::cout<<"External eop/ephemeris/density CSV, gravity/phys JSON overrides and the orbit_engine appendix-D diagnostic protocol are supported; see docs.\n";
+if(app=="satnet")std::cout<<"CUDA candidate evaluation is available via --backend cuda|auto (Device(6) when built without CUDA).\n";
 return 0;
 }
 if(o.m.count("dump-defaults")){
