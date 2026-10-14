@@ -1164,8 +1164,8 @@ S=std::max(S,sl+1);
 need((!l.a.count("P")||uint(l.a.at("P"))==P)&&(!l.a.count("S")||uint(l.a.at("S"))==S),2,"explicit","P/S mismatch");
 }
 else{
-need(xs.empty(),2,"Walker","per-satellite Walker overrides not implemented; use explicit layer");
 need(P>=1&&P<=65535&&S>=1&&S<=65535&&mul(P,S)<=1000000&&F<P,2,"Walker","P/S/F range");
+std::map<std::pair<U,U>,size_t> wlookup;
 for(U p=0;p<P;++p)for(U sl=0;sl<S;++sl){
 Sat s=model;
 s.plane=uint16_t(p);
@@ -1174,7 +1174,33 @@ s.om=wrap(model.om+(pat=="delta"?2*pi:pi)*double(p)/double(P));
 s.u=wrap(model.u+2*pi*double(sl)/double(S)+2*pi*double(F*p)/double(P*S));
 s.radio=r;
 s.phys=ph;
+wlookup[{p,sl}]=members.size();
 members.push_back(s);
+}
+std::set<std::pair<U,U>> wslots;
+for(auto&x:xs){
+keys(x,"plane slot a_km alt_km e inc_deg raan_deg u_deg argp_deg name");
+need(!(x.a.count("a_km")&&x.a.count("alt_km")),2,"satellite","a/alt exclusive");
+U p=xu(x,"plane",0),sl=0;
+if(x.a.count("slot"))sl=uint(x.a.at("slot"));
+else while(wslots.count({p,sl}))++sl;
+need(p<=65534&&sl<=65534&&wslots.insert({p,sl}).second,2,"satellite","slot duplicate/range");
+need(p<P&&sl<S,2,"Walker","satellite override outside Walker grid");
+Sat&s=members[wlookup.at({p,sl})];
+if(x.a.count("a_km")||x.a.count("alt_km"))s.a=x.a.count("a_km")?real(x.a.at("a_km"))*1000:RE+real(x.a.at("alt_km"))*1000;
+if(x.a.count("e"))s.e=real(x.a.at("e"));
+if(x.a.count("inc_deg"))s.inc=real(x.a.at("inc_deg"))*pi/180;
+if(x.a.count("raan_deg"))s.om=wrap(real(x.a.at("raan_deg"))*pi/180);
+if(x.a.count("u_deg"))s.u=wrap(real(x.a.at("u_deg"))*pi/180);
+if(x.a.count("argp_deg"))s.w=wrap(real(x.a.at("argp_deg"))*pi/180);
+need(s.a<=1e9&&s.e>=0&&s.e<1&&s.inc>=0&&s.inc<=pi&&s.a*(1-s.e)>=RE+120000,2,"orbit","invalid elements");
+s.explicitname=attr(x,"name");
+bool sr=false,sp=false;
+for(auto&z:x.c){
+if(z.tag=="radio"){need(!sr,2,"radio","duplicate");sr=true;radio(z,s.radio);}
+else if(z.tag=="phys"){need(!sp,2,"phys","duplicate");sp=true;phys(z,s.phys);}
+else fail(2,"satellite","unknown child");
+}
 }
 }
 need(add(gid,mul(P,S))<=1000000,2,"catalog","nominal slots exceed 1e6");

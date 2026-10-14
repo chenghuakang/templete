@@ -24,7 +24,7 @@
 以下也是后续实现任务，不能因为全流程 demo 成功就忽略：
 
 1. 外部 eop_csv、ephemeris_csv、density_csv、phys_json：已支持（相对 settings 目录解析，格式/SHA256/size 校验并写入 manifest inputs.external_data[]；EOP 覆盖 dut1/xp/yp/tt 并驱动 Rdot 差分，外部星历直接作为积分轴，外部 rho 覆盖默认密度且仍乘一次 density_scale；phys_json 按 gid 覆写名义成员，被筛除成员记录 not_used 于 phys_sources[]；覆盖不足返回 Config，不外推）。gravity_json 支持部分覆盖并记录外部文件身份。
-2. Walker 层中 satellite 逐星覆写：当前 Config 拒绝；需要使用 explicit 层，不会静默丢弃覆写。
+2. Walker 层中 satellite 逐星覆写：已支持。layer 基 <orbit> + Walker 公式网格 P×S，<satellite plane? slot? a_km?/alt_km? e? inc_deg? raan_deg? u_deg? argp_deg? name? radio? phys?> 按 (plane,slot) 覆写目标成员（plane 默认0、slot 默认该 plane 最小未用；越界/重复返回 Config）。按 §11.1，Walker geometry canonical 仍只用基础6根数，逐星覆写经 config_sha256/run_id 进入身份。
 3. 文档第11章 canonical JSON 与 run_id：当前明确采用 MVP 身份，而非标准身份；manifest 写警告。geometry/config 原始摘要分离已实现。
 4. 内存：当前按包缓冲轨道/图，并保守预检部分缓冲和候选。batch 仅解析，不改变规划。不承诺覆盖所有自有分配峰值；并非文档严格有界内存实现。大包可以 Config 拒绝，即使正式版本应能够流式接受。
 5. Result<T> 错误通道、全部指定命名空间/源码分层：当前共享库内部使用 Err 异常，由 application 统一转换。XML 错误没有完整行列定位；部分 CLI 数值错误归类仍为 Config。
