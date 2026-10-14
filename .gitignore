@@ -1,0 +1,10 @@
+# build and test artifacts
+build/
+benchmark_runs/
+test_runs/
+test_runs_pre/
+test_runs_smoke/
+__pycache__/
+*.pyc
+*.part
+simulation_defaults.json
