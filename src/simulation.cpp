@@ -97,7 +97,7 @@ namespace unified {
         U measured_latency_ns=0,measured_latency_count=0;
         U generated_packets=0,delivered_packets=0,dropped_packets=0,queue_drop=0,link_drop=0,no_route_drop=0,hop_drop=0,inflight=0;
         bool tracing=false;
-        U trace_count=0,trace_reached=0;
+        U trace_count=0,trace_reached=0,retry_remaining=0,trace_retries=0;
         tr::Result active_trace{};
         unsigned ttl=1,index=0;
         std::ofstream business,stats,trace_text,trace_json,iperf_json;
@@ -486,7 +486,31 @@ namespace unified {
             log("traceroute",j);
             trace_json<<j.dump()<<'\n';
             trace_text<<tracer.text(active_trace)<<'\n';
-            next_probe=later(U(duration(opts,"probe-interval-s")));
+            // Disconnection retry: after a round that does not reach the destination, send one probe
+            // packet every retry interval; once retry-max packets have been sent the next normal
+            // traceroute round starts.
+            if(!active_trace.reached&&!active_trace.censored&&val(opts,"trace-retry-max")>0){
+                retry_remaining=val(opts,"trace-retry-max");
+                next_probe=later(U(duration(opts,"trace-retry-interval-s")));
+            }
+            else{
+                retry_remaining=0;
+                next_probe=later(U(duration(opts,"probe-interval-s")));
+            }
+        }
+        void begin_retry(){
+            auto p=tracer.probe(std::uint32_t(src),std::uint32_t(dst),now,1,0);
+            ++trace_retries;
+            J j=J::obj();
+            j["retry_index"]=trace_retries;
+            j["sent_ns"]=p.sent_ns;
+            j["finished_ns"]=p.finished_ns;
+            j["status"]=p.status==tr::Status::Reply?"reply":p.status==tr::Status::Timeout?"timeout":"censored";
+            j["rtt_ns"]=p.rtt_ns?J(*p.rtt_ns):J();
+            j["detail"]=p.detail;
+            log("traceroute_retry",j);
+            if(--retry_remaining>0)next_probe=later(U(duration(opts,"trace-retry-interval-s")));
+            else next_probe=later(U(duration(opts,"probe-interval-s")));
         }
         void commit_probe(const tr::Probe&p){
             active_trace.finished_ns=now;
@@ -606,7 +630,7 @@ namespace unified {
                     events.pop();
                     dispatch(std::move(e));
                 }
-                if(!tracing&&now>=next_probe)begin_trace();
+                if(!tracing&&now>=next_probe){if(retry_remaining)begin_retry();else begin_trace();}
                 if(now==next_report){
                     stats_row();
                     next_report=later(U(duration(opts,"report-interval-s")));
@@ -665,6 +689,7 @@ namespace unified {
             r["mean_one_way_delay_ns"]=measured_latency_count?double(measured_latency_ns)/double(measured_latency_count):0.0;
             r["completed_traceroutes"]=trace_count;
             r["reached_traceroutes"]=trace_reached;
+            r["traceroute_retries"]=trace_retries;
             r["handover_policy"]=input.plan?policy_name(input.plan->config().policy):"none";
             if(input.plan){
                 r["handover_events"]=handover_events;
