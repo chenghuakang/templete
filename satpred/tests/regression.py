@@ -16,7 +16,22 @@ with tempfile.TemporaryDirectory(prefix='satpred test ') as tmp:
     run('satpred','--threads','1','--threads','2',exit=1)
     run('satpred','--step','0',exit=1)
     run('satpred','--dump-defaults','--threads','2',exit=1)
-    run('satnet','--backend','cuda',exit=6)
+    # backend=cuda: Device(6) when built without CUDA; when built with CUDA it runs and must produce
+    # the same logical graph/edge payload as the CPU backend (SDD §3.3, L3-01). The G scope only
+    # evaluates candidate distances; the host candidate set is retained unchanged.
+    def satnet_raw(app,*extra,out):
+        return subprocess.run([str(bin/(app+suffix)),'--output',str(out),'--duration','60','--package','60','--threads','2',*map(str,extra)],env=env,capture_output=True,text=True)
+    cu=satnet_raw('satnet','--backend','cuda',out=pathlib.Path(tmp)/'gpu')
+    assert cu.returncode in (0,6),(cu.returncode,cu.stderr)
+    if cu.returncode==0:
+        cp=satnet_raw('satnet','--backend','cpu',out=pathlib.Path(tmp)/'cpu')
+        assert cp.returncode==0,cp.stderr
+        gm=json.loads((pathlib.Path(tmp)/'gpu'/'manifest.json').read_text());cm=json.loads((pathlib.Path(tmp)/'cpu'/'manifest.json').read_text())
+        assert gm['software']['actual_backend']=='cuda' and cm['software']['actual_backend']=='cpu'
+        assert gm['gpu_candidate_eval']['max_distance_deviation_m']==0,'GPU/CPU distance must be bit-identical'
+        assert gm['products'][0]['directed_edges']==cm['products'][0]['directed_edges']
+        ga=json.loads(next((pathlib.Path(tmp)/'gpu'/'exports').glob('*.links.json')).read_text());ca=json.loads(next((pathlib.Path(tmp)/'cpu'/'exports').glob('*.links.json')).read_text())
+        assert ga['run_id']==ca['run_id'] and ga['slices']==ca['slices'],'edge payload must match CPU'
     run('orbit_engine',exit=1)
     bad=pathlib.Path(tmp)/'bad.sbin';b=bytearray(pathlib.Path(mark['orbit']).read_bytes());b[508]^=1;bad.write_bytes(b)
     run('satread','verify',bad,exit=7)

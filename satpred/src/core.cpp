@@ -1,6 +1,7 @@
 #include "core.hpp"
 #include "oneweb_small.hpp"
 #include "rk8.hpp"
+#include "cuda_candidates.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -41,6 +42,14 @@ using U=uint64_t;
 using I=int64_t;
 using B=std::vector<uint8_t>;
 constexpr double pi=3.14159265358979323846, RE=6378137, RB=6356752.314245, mu=3.986004418e14, AU=149597870700.0;
+#ifndef SP_CUDA
+bool cudaAvailable(){
+return false;
+}
+int cudaCandidateDistance(const double*,const double*,std::size_t,double*){
+return -1;
+}
+#endif
 struct Err:std::runtime_error{
 int code;
 std::string where;
@@ -2636,7 +2645,12 @@ return out;
 }
 }
 ;
-std::vector<Edge>connect(const Config&c,const Orbit&o,U j,const std::vector<Node>&ground,const Policy&p,U budget){
+struct GpuStats{U pairs=0;double maxdev=0;};
+GpuStats&gpuStats(){
+static GpuStats s;
+return s;
+}
+std::vector<Edge>connect(const Config&c,const Orbit&o,U j,const std::vector<Node>&ground,const Policy&p,U budget,bool gpu){
 size_t N=c.s.size();
 I time=o.t0+I(j)*o.step;
 std::vector<V>r(N);
@@ -2699,9 +2713,35 @@ std::vector<Link>ls;
 std::vector<Radio>rad;
 for(auto&s:c.s)rad.push_back(s.radio);
 for(auto&g:ground)rad.push_back(g.radio);
+std::vector<double>dist;
+bool gpuok=false;
+if(gpu&&!pairs.empty()){
+std::vector<std::pair<uint32_t,uint32_t>>pl(pairs.begin(),pairs.end());
+std::vector<double>A(pl.size()*3),Bv(pl.size()*3);
+for(size_t i=0;i<pl.size();++i){
+V va=r[pl[i].first],vb=pl[i].second<N?r[pl[i].second]:ground[pl[i].second-N].xyz;
+A[3*i]=va.x;
+A[3*i+1]=va.y;
+A[3*i+2]=va.z;
+Bv[3*i]=vb.x;
+Bv[3*i+1]=vb.y;
+Bv[3*i+2]=vb.z;
+}
+dist.resize(pl.size());
+gpuok=sp::cudaCandidateDistance(A.data(),Bv.data(),pl.size(),dist.data())==0;
+need(gpuok,6,"backend","CUDA candidate distance evaluation failed");
+}
+size_t pi=0;
 for(auto [a,b]:pairs){
 V A=r[a],B=b<N?r[b]:ground[b-N].xyz;
 double d=norm(B-A);
+if(gpuok){
+double hd=norm(B-A);
+++gpuStats().pairs;
+gpuStats().maxdev=std::max(gpuStats().maxdev,std::abs(dist[pi]-hd));
+d=dist[pi];
+}
+++pi;
 int kind=b<N?0:1;
 if(!std::isfinite(d)||d<=0||d>(kind?p.access:p.search)||!visible(A,B))continue;
 if(kind&&dot(A-B,ground[b-N].up)/d+1e-12<std::sin(p.elev))continue;
@@ -2805,7 +2845,7 @@ a.a.push_back(j);
 }
 return a;
 }
-B graphwrite(const Config&c,const Orbit&o,const std::vector<Node>&g,const Policy&p,J metadata,const B&source,U budget){
+B graphwrite(const Config&c,const Orbit&o,const std::vector<Node>&g,const Policy&p,J metadata,const B&source,U budget,bool gpu){
 auto ms=metadata.dump();
 U ti=align(256+ms.size(),64),po=align(ti+o.M*32,4096);
 B b(static_cast<size_t>(po), uint8_t(0));
@@ -2828,7 +2868,7 @@ ps(b,256,ms,ms.size());
 U total=0;
 for(U j=0;j<o.M;++j){
 safe();
-auto edges=connect(c,o,j,g,p,budget);
+auto edges=connect(c,o,j,g,p,budget,gpu);
 B e=edgesbytes(edges);
 need(add(b.size(),e.size())<budget/3,2,"graph","MVP package buffer exceeds budget");
 U d=ti+j*32;
@@ -3064,7 +3104,13 @@ Run r=runtime(o);
 Policy pol=policy(o);
 auto backend=o.m.at("backend");
 need(backend=="cpu"||backend=="auto"||backend=="cuda",1,"backend","unknown");
-if(backend=="cuda")fail(6,"backend","CUDA not implemented/available");
+bool gpu=false;
+if(backend=="cuda"){
+need(sp::cudaAvailable(),6,"backend","CUDA device unavailable");
+gpu=true;
+}
+else if(backend=="auto")gpu=sp::cudaAvailable();
+gpuStats()=GpuStats{};
 Config cfg=constellation(fs::u8path(o.m.at("satellites")),r.start,r.end,false,false);
 auto ground=grounds(fs::u8path(o.m.at("nodes")),cfg.s.size());
 fs::path out=newrun(o.m.at("output")),orbitdir=out/"orbits";
@@ -3149,7 +3195,7 @@ B source=filesha(src);
 J meta=J::obj();
 meta["format"]="satnet-metadata-1.1";
 meta["software_version"]="0.1.0-mvp";
-meta["actual_backend"]="cpu";
+meta["actual_backend"]=gpu?"cuda":"cpu";
 meta["run_id"]=hex(id);
 meta["satellite_xml_sha256"]=hex(cfg.config);
 meta["ground_xml_sha256"]=hex(filesha(fs::u8path(o.m.at("nodes"))));
@@ -3171,7 +3217,7 @@ for(auto k:{
 ass["processing_included"]=pol.proc>0;
 meta["assumptions"]=ass;
 auto graph=out/"graphs"/(pathtext(src.stem())+".ngb"),link=out/"exports"/(pathtext(src.stem())+".links.json");
-B b=graphwrite(cfg,orb,ground,pol,meta,source,r.budget);
+B b=graphwrite(cfg,orb,ground,pol,meta,source,r.budget,gpu);
 atomic(graph,b);
 Graph g=graphread(graph,r.budget,src);
 links(link,g,orb,sha(b));
@@ -3195,7 +3241,7 @@ m["format"]="SATNET-1.1";
 m["status"]="complete";
 m["software"]=J::obj();
 m["software"]["version"]="0.1.0-mvp";
-m["software"]["actual_backend"]="cpu";
+m["software"]["actual_backend"]=gpu?"cuda":"cpu";
 m["software"]["threads"]=r.threads;
 m["run"]=J::obj();
 m["run"]["run_id"]=hex(id);
@@ -3217,9 +3263,15 @@ m["nodes"]["satellites"]=U(cfg.s.size());
 m["nodes"]["ground"]=U(ground.size());
 m["nodes"]["total"]=U(cfg.s.size()+ground.size());
 m["products"]=products;
+if(gpu){
+J gs=J::obj();
+gs["candidate_pairs_evaluated"]=gpuStats().pairs;
+gs["max_distance_deviation_m"]=gpuStats().maxdev;
+m["gpu_candidate_eval"]=gs;
+}
 m["warnings"]=J::arr();
 m["warnings"].a.emplace_back("MVP: run_id is not normative canonical; package buffers; see IMPLEMENTATION_STATUS.md");
-if(backend=="auto")m["warnings"].a.emplace_back("CUDA unavailable: selected cpu");
+if(backend=="auto"&&!gpu)m["warnings"].a.emplace_back("CUDA unavailable: selected cpu");
 if(o.m.at("orbit-dir")!="none"&&o.explicitkeys.count("orbit-program"))m["warnings"].a.emplace_back("ignored_orbit_program");
 atomic(out/"manifest.json",m.dump());
 std::ostringstream csv;
