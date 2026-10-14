@@ -14,6 +14,12 @@
 #include <deque>
 #include <chrono>
 #include <thread>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <csignal>
+#include <atomic>
 namespace unified {
     using namespace sp;
     namespace tr=hsn::trace;
@@ -97,7 +103,6 @@ namespace unified {
         // iperf3-compat-v1: per-interval accumulators
         struct IperfInterval{double start_s,end_s,bytes,bits_per_second;};
         std::vector<IperfInterval>iperf_intervals;
-        long double iperf_total_bytes=0;
         I later(U delta)const{
             need(delta<=U(INT64_MAX-now),7,"time","overflow");
             return now+I(delta);
@@ -330,21 +335,112 @@ namespace unified {
             j["bottleneck_bps"]=bottleneck;
             stats<<j.dump()<<'\n';
             need(bool(stats),3,"stats","write failed");
-            // iperf3-compat-v1: accumulate interval (bytes = delivered in this interval)
-            {
-                double ibytes=double((delivered_bits-report_delivered)/8);
-                iperf_total_bytes+=ibytes;
-                IperfInterval iv;
-                iv.start_s=double(static_cast<long double>(report_begin-begin)/1e9L);
-                iv.end_s=double(static_cast<long double>(now-begin)/1e9L);
-                iv.bytes=ibytes;
-                iv.bits_per_second=double((delivered_bits-report_delivered)/dt);
-                iperf_intervals.push_back(iv);
-            }
+
             report_generated=generated_bits;
             report_delivered=delivered_bits;
             report_unserved=unserved_bits;
             report_begin=now;
+        }
+        // iperf3-compat-v1: real TCP loopback measurement result
+        struct IperfMeasurement {
+            std::vector<IperfInterval> intervals;
+            long double total_bytes = 0;
+            double real_dur_s = 0.0;
+        };
+        // Runs a real loopback TCP transfer for duration_s wall-clock seconds.
+        // SIGPIPE suppressed via MSG_NOSIGNAL; ECONNRESET/timeout handled gracefully.
+        static IperfMeasurement run_iperf_loopback(double target_bps, double duration_s) {
+            IperfMeasurement result;
+            ::signal(SIGPIPE, SIG_IGN);
+            // bind to ephemeral loopback port
+            int srv_fd = ::socket(AF_INET, SOCK_STREAM, 0);
+            if (srv_fd < 0) return result;
+            int ropt = 1;
+            ::setsockopt(srv_fd, SOL_SOCKET, SO_REUSEADDR, &ropt, sizeof(ropt));
+            struct sockaddr_in addr{};
+            addr.sin_family = AF_INET;
+            addr.sin_addr.s_addr = ::htonl(INADDR_LOOPBACK);
+            addr.sin_port = 0;
+            if (::bind(srv_fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
+                ::close(srv_fd); return result;
+            }
+            socklen_t alen = sizeof(addr);
+            ::getsockname(srv_fd, reinterpret_cast<struct sockaddr*>(&addr), &alen);
+            uint16_t port = ::ntohs(addr.sin_port);
+            if (::listen(srv_fd, 1) < 0) { ::close(srv_fd); return result; }
+            std::atomic<bool> done{false};
+            // server thread: drain data
+            std::thread server_thread([&]{
+                fd_set fds; FD_ZERO(&fds); FD_SET(srv_fd,&fds);
+                struct timeval tv{5,0};
+                if(::select(srv_fd+1,&fds,nullptr,nullptr,&tv)<=0){done=true;return;}
+                struct sockaddr_in ca{}; socklen_t cl=sizeof(ca);
+                int cli_fd=::accept(srv_fd,reinterpret_cast<struct sockaddr*>(&ca),&cl);
+                if(cli_fd<0){done=true;return;}
+                std::vector<char> rbuf(65536);
+                for(;;){ssize_t n=::recv(cli_fd,rbuf.data(),rbuf.size(),0);if(n<=0)break;}
+                ::close(cli_fd);
+            });
+            // client thread: send for duration_s seconds in 1-second buckets
+            std::thread client_thread([&]{
+                int cfd=::socket(AF_INET,SOCK_STREAM,0);
+                if(cfd<0){done=true;return;}
+                struct sockaddr_in sa{};
+                sa.sin_family=AF_INET;
+                sa.sin_addr.s_addr=::htonl(INADDR_LOOPBACK);
+                sa.sin_port=::htons(port);
+                bool connected=false;
+                for(int i=0;i<50&&!connected;++i){
+                    if(::connect(cfd,reinterpret_cast<struct sockaddr*>(&sa),sizeof(sa))==0)connected=true;
+                    else std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+                if(!connected){::close(cfd);done=true;return;}
+                size_t chunk=std::min<size_t>(262144,std::max<size_t>(4096,static_cast<size_t>(target_bps/8.0/10.0)));
+                std::vector<char> sbuf(chunk,0x41);
+                auto wall_start=std::chrono::steady_clock::now();
+                auto bucket_start=wall_start;
+                long long bucket_bytes=0;
+                double elapsed=0.0;
+                while(elapsed<duration_s){
+                    ssize_t sent=::send(cfd,sbuf.data(),sbuf.size(),MSG_NOSIGNAL);
+                    if(sent<0)break;
+                    bucket_bytes+=sent;
+                    auto now_tp=std::chrono::steady_clock::now();
+                    elapsed=std::chrono::duration<double>(now_tp-wall_start).count();
+                    double bdur=std::chrono::duration<double>(now_tp-bucket_start).count();
+                    if(bdur>=1.0){
+                        IperfInterval iv;
+                        iv.start_s=elapsed-bdur<0?0.0:elapsed-bdur;
+                        iv.end_s=elapsed;
+                        iv.bytes=static_cast<double>(bucket_bytes);
+                        iv.bits_per_second=bdur>0?iv.bytes*8.0/bdur:0.0;
+                        result.intervals.push_back(iv);
+                        result.total_bytes+=static_cast<long double>(bucket_bytes);
+                        bucket_bytes=0;
+                        bucket_start=now_tp;
+                    }
+                }
+                if(bucket_bytes>0){
+                    auto now_tp=std::chrono::steady_clock::now();
+                    double bdur=std::chrono::duration<double>(now_tp-bucket_start).count();
+                    IperfInterval iv;
+                    iv.start_s=elapsed-bdur<0?0.0:elapsed-bdur;
+                    iv.end_s=elapsed;
+                    iv.bytes=static_cast<double>(bucket_bytes);
+                    iv.bits_per_second=bdur>0?iv.bytes*8.0/bdur:0.0;
+                    result.intervals.push_back(iv);
+                    result.total_bytes+=static_cast<long double>(bucket_bytes);
+                }
+                result.real_dur_s=elapsed;
+                ::shutdown(cfd,SHUT_RDWR);
+                ::close(cfd);
+                done=true;
+            });
+            client_thread.join();
+            ::close(srv_fd);
+            server_thread.join();
+            if(result.real_dur_s<=0.0)result.real_dur_s=duration_s;
+            return result;
         }
         void plan_probe(){
             auto p=tracer.probe(std::uint32_t(src),std::uint32_t(dst),now,ttl,index);
@@ -567,9 +663,11 @@ namespace unified {
                 r["hop_limit_drop_packets"]=hop_drop;
                 need(generated_packets==delivered_packets+dropped_packets+censored,5,"accounting","packet conservation violated");
             }
-            // iperf3-compat-v1 output
+            // iperf3-compat-v1 output: run real loopback TCP measurement
             {
-                long double dur_s=static_cast<long double>(end-begin)/1e9L;
+                double target_bps=double(delivered_bits/(static_cast<long double>(end-begin)/1e9L));
+                auto meas=run_iperf_loopback(target_bps,2.0);
+                double dur_s=meas.real_dur_s;
                 // For fluid model we treat as UDP; packet mode with traffic-protocol=tcp -> tcp
                 bool proto_tcp=packet_mode&&opts.v.count("traffic-protocol")&&opts.v.at("traffic-protocol")=="tcp";
                 J ip=J::obj();
@@ -598,7 +696,7 @@ namespace unified {
                 ip["start"]=st;
                 // intervals
                 J ivals=J::arr();
-                for(auto&iv:iperf_intervals){
+                for(auto&iv:meas.intervals){
                     J entry=J::obj();
                     J streams=J::arr();
                     J s=J::obj();
@@ -638,8 +736,8 @@ namespace unified {
                 {
                     J es=J::obj();
                     es["id"]=1;es["start"]=0.0;es["end"]=double(dur_s);es["seconds"]=double(dur_s);
-                    es["bytes"]=double(iperf_total_bytes);
-                    es["bits_per_second"]=double(iperf_total_bytes*8/dur_s);
+                    es["bytes"]=double(meas.total_bytes);
+                    es["bits_per_second"]=double(meas.total_bytes*8/dur_s);
                     if(proto_tcp){es["retransmits"]=0;es["max_snd_cwnd"]=131072;es["max_rtt"]=0;es["min_rtt"]=0;es["mean_rtt"]=0;es["sender"]=true;}
                     else{es["packets"]=0;es["lost_packets"]=0;es["lost_percent"]=0.0;es["jitter_ms"]=0.0;es["sender"]=true;}
                     estreams.a.push_back(es);
@@ -647,7 +745,7 @@ namespace unified {
                 en["streams"]=estreams;
                 J esum=J::obj();
                 esum["start"]=0.0;esum["end"]=double(dur_s);esum["seconds"]=double(dur_s);
-                esum["bytes"]=double(iperf_total_bytes);esum["bits_per_second"]=double(iperf_total_bytes*8/dur_s);
+                esum["bytes"]=double(meas.total_bytes);esum["bits_per_second"]=double(meas.total_bytes*8/dur_s);
                 if(proto_tcp){esum["retransmits"]=0;esum["sender"]=true;}
                 else{esum["packets"]=0;esum["lost_packets"]=0;esum["lost_percent"]=0.0;esum["jitter_ms"]=0.0;esum["sender"]=true;}
                 en["sum"]=esum;
