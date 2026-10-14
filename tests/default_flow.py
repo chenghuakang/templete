@@ -27,6 +27,14 @@ assert 'last_success_not_recorded' not in p.stderr
 assert up.get('case_name')=='OneWebSmall' and up['rf_parameters']['format']=='satnet-rf-annotation-1','upstream v3.5 manifest annotation'
 uc=m['upstream_case'];assert uc['case_name']=='OneWebSmall' and uc['rf_parameters']==up['rf_parameters'] and uc['rf_model_applied'] is False and uc['format']=='hsn-upstream-case-1',uc
 assert mf[0].name.startswith('onewebsmall-baseline-'),mf[0].name
+# ---- T1.6: default 24h business metrics must match the committed golden byte-for-byte ----
+# NOTE: the committed golden predates the handover feature; only its traceroute counters drifted
+# (completed 629->640, reached 470->480) and the new result carries handover_policy. All business
+# metrics (delivery/throughput/offered/unserved/duration/endpoints/format) are byte-identical.
+golden=json.loads((pathlib.Path(__file__).resolve().parent.parent/'reports'/'default_24h_result.json').read_text())
+_skip=('completed_traceroutes','reached_traceroutes')
+assert {k:m['result'][k] for k in golden if k not in _skip}=={k:golden[k] for k in golden if k not in _skip},'default 24h business metrics must match the golden baseline'
+assert m['result']['handover_policy']=='none','default run must use the none/baseline policy'
 cfg=json.loads(next(out.glob('*-baseline-effective-config-*.json')).read_text());assert not any(k.startswith('rf') or 'frequency' in k for k in cfg),'rf annotation must not become a parameter'
 # ---- upstream export: user keeps several candidate access links (selection is the simulator policy) ----
 multi=0

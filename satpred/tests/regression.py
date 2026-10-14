@@ -98,6 +98,57 @@ with tempfile.TemporaryDirectory(prefix='satpred test ') as tmp:
     assert pm['inputs']['config_sha256']==bm['inputs']['config_sha256'] and pm['inputs']['settings_sha256']!=bm['inputs']['settings_sha256'],'settings-only change touches settings_sha256 only'
     assert spred(pathlib.Path(tmp)/'ext_missing','--config',exsat,'--settings',str(ext/'missing.json')).returncode==3,'unreadable external file -> Io(3)'
     assert spred(pathlib.Path(tmp)/'ext_short','--config',exsat,'--settings',str(ext/'short.json')).returncode==2,'EOP table not covering the window -> Config(2)'
+    # ---- T1.1a/b/c: malformed columns / non-monotonic time / window coverage (incl. EOP +-0.5s) -> Config(2) ----
+    (ext/'badcols.csv').write_text('utc_seconds,dut1_s,xp_arcsec,yp_arcsec,wrong_col\n'+'\n'.join(f'{t},0.0,0.0,0.0,69.184' for t in times)+'\n')
+    (ext/'badcols.json').write_text(json.dumps({'eop_csv':'badcols.csv'}))
+    assert spred(pathlib.Path(tmp)/'ext_badcols','--config',exsat,'--settings',str(ext/'badcols.json')).returncode==2,'EOP column names -> Config(2)'
+    (ext/'nonmono.csv').write_text('utc_seconds,dut1_s,xp_arcsec,yp_arcsec,tt_minus_utc_s\n'+'\n'.join(f'{t},0.0,0.0,0.0,69.184' for t in [times[0],times[2],times[1],times[3]])+'\n')
+    (ext/'nonmono.json').write_text(json.dumps({'eop_csv':'nonmono.csv'}))
+    assert spred(pathlib.Path(tmp)/'ext_nonmono','--config',exsat,'--settings',str(ext/'nonmono.json')).returncode==2,'non-increasing utc_seconds -> Config(2)'
+    (ext/'eop_nomargin.csv').write_text('utc_seconds,dut1_s,xp_arcsec,yp_arcsec,tt_minus_utc_s\n'+'\n'.join(f'{epoch+i},0.0,0.0,0.0,69.184' for i in range(0,3601,60))+'\n')
+    (ext/'eop_nomargin.json').write_text(json.dumps({'eop_csv':'eop_nomargin.csv'}))
+    assert spred(pathlib.Path(tmp)/'ext_eop_nomargin','--config',exsat,'--settings',str(ext/'eop_nomargin.json')).returncode==2,'EOP table without the +-0.5s margin -> Config(2)'
+    (ext/'eop_margin.csv').write_text('utc_seconds,dut1_s,xp_arcsec,yp_arcsec,tt_minus_utc_s\n'+'\n'.join(f'{epoch-1+i},0.0,0.0,0.0,69.184' for i in range(0,3601,60))+'\n')
+    (ext/'eop_margin.json').write_text(json.dumps({'eop_csv':'eop_margin.csv'}))
+    assert spred(pathlib.Path(tmp)/'ext_eop_margin','--config',exsat,'--settings',str(ext/'eop_margin.json')).returncode==0,'EOP table with the +-0.5s margin -> Ok'
+    (ext/'short_eph.csv').write_text('utc_seconds,sun_x,sun_y,sun_z,moon_x,moon_y,moon_z\n'+'\n'.join(f'{epoch-90000+600*i},1.496e11,0,0,3.844e8,0,0' for i in range(3))+'\n')
+    (ext/'short_eph.json').write_text(json.dumps({'ephemeris_csv':'short_eph.csv'}))
+    assert spred(pathlib.Path(tmp)/'ext_short_eph','--config',exsat,'--settings',str(ext/'short_eph.json')).returncode==2,'ephemeris table not covering the window -> Config(2)'
+    (ext/'short_den.csv').write_text('utc_seconds,rho_kg_m3\n'+'\n'.join(f'{epoch-90000+600*i},1e-13' for i in range(3))+'\n')
+    (ext/'short_den.json').write_text(json.dumps({'density_csv':'short_den.csv'}))
+    assert spred(pathlib.Path(tmp)/'ext_short_den','--config',exsat,'--settings',str(ext/'short_den.json')).returncode==2,'density table not covering the window -> Config(2)'
+    # ---- T1.2/T1.3: eop_csv dut1/xp and ephemeris_csv must actually drive the integration ----
+    (ext/'eop_big.csv').write_text('utc_seconds,dut1_s,xp_arcsec,yp_arcsec,tt_minus_utc_s\n'+'\n'.join(f'{t},0.5,10.0,10.0,69.184' for t in times)+'\n')
+    (ext/'eop_big.json').write_text(json.dumps({'eop_csv':'eop_big.csv'}))
+    eo=spred(pathlib.Path(tmp)/'ext_eop','--config',exsat,'--settings',str(ext/'eop_big.json'));assert eo.returncode==0,eo.stderr
+    assert manifest(pathlib.Path(tmp)/'ext_eop')['products'][0]['sha256']!=bm['products'][0]['sha256'],'eop_csv dut1/xp must change the integrated product'
+    (ext/'eph_big.csv').write_text('utc_seconds,sun_x,sun_y,sun_z,moon_x,moon_y,moon_z\n'+'\n'.join(f'{t},2.0e11,0,0,3.844e8,0,0' for t in times)+'\n')
+    (ext/'eph_big.json').write_text(json.dumps({'ephemeris_csv':'eph_big.csv'}))
+    ee=spred(pathlib.Path(tmp)/'ext_eph','--config',exsat,'--settings',str(ext/'eph_big.json'));assert ee.returncode==0,ee.stderr
+    assert manifest(pathlib.Path(tmp)/'ext_eph')['products'][0]['sha256']!=bm['products'][0]['sha256'],'external ephemeris must drive the third-body state input'
+
+    # ---- T1.4: external density rho is used and multiplied by density_scale exactly once ----
+    (ext/'den_a.csv').write_text('utc_seconds,rho_kg_m3\n'+'\n'.join(f'{t},1e-13' for t in times)+'\n')
+    (ext/'den_b.csv').write_text('utc_seconds,rho_kg_m3\n'+'\n'.join(f'{t},2e-13' for t in times)+'\n')
+    (ext/'den_s1x2.json').write_text(json.dumps({'density_csv':'den_a.csv','density_scale':2.0}))
+    (ext/'den_s2x1.json').write_text(json.dumps({'density_csv':'den_b.csv','density_scale':1.0}))
+    (ext/'den_s1x1.json').write_text(json.dumps({'density_csv':'den_a.csv','density_scale':1.0}))
+    for nm,st in (('den1','den_s1x2'),('den2','den_s2x1'),('den0','den_s1x1')):
+        r=spred(pathlib.Path(tmp)/('ext_'+nm),'--config',exsat,'--settings',str(ext/(st+'.json')));assert r.returncode==0,r.stderr
+    def dpayload(out):
+        mm=manifest(out);return (out/mm['products'][0]['file']).read_bytes()[512:]
+    p1=dpayload(pathlib.Path(tmp)/'ext_den1');p2=dpayload(pathlib.Path(tmp)/'ext_den2');p0=dpayload(pathlib.Path(tmp)/'ext_den0')
+    assert p1==p2,'rho*scale must be applied exactly once (rho=1e-13,scale=2 == rho=2e-13,scale=1)'
+    assert p1!=p0,'density_scale must change the drag-affected trajectory'
+    assert p2!=p0,'external density rho must change the drag-affected trajectory'
+    # ---- T1.5: excluded overridden member -> not_used:true; non-nominal gid -> Config(2) ----
+    xs0=(bin/'examples'/'satellites.xml').read_text()
+    (ext/'faults.xml').write_text(xs0.replace('  </layer>','    <faults><missing plane="0" slot="1"/></faults>\n  </layer>'))
+    (ext/'phys_illegal.json').write_text(json.dumps({'9999':{'mass_kg':160,'cd':2.3,'source':'documented','reference':'x'}}))
+    (ext/'phys_illegal_set.json').write_text(json.dumps({'phys_json':'phys_illegal.json'}))
+    assert spred(pathlib.Path(tmp)/'ext_phys_illegal','--config',exsat,'--settings',str(ext/'phys_illegal_set.json')).returncode==2,'non-nominal phys_json gid -> Config(2)'
+    ex1=spred(pathlib.Path(tmp)/'ext_phys_excl','--config',str(ext/'faults.xml'),'--settings',str(ext/'phys_only.json'),'--exclude-missing');assert ex1.returncode==0,ex1.stderr
+    assert [q for q in manifest(pathlib.Path(tmp)/'ext_phys_excl')['phys_sources'] if q['gid']==1]==[{'gid':1,'source':'documented','reference':'regression','not_used':True}],manifest(pathlib.Path(tmp)/'ext_phys_excl')['phys_sources']
 
     # ---- v3.5 Walker layer per-satellite overrides (SDD §4.1/§4.2/§11.1) ----
     src=(bin/'examples'/'satellites.xml').read_text();assert src.count('  </layer>')==1,'default sample must hold exactly one Walker layer'
@@ -112,6 +163,27 @@ with tempfile.TemporaryDirectory(prefix='satpred test ') as tmp:
     assert om['run']['run_id']!=bm['run']['run_id'],'override must enter run_id'
     assert spred(pathlib.Path(tmp)/'walk_bad','--config',str(wdir/'bad.xml'),'--settings',exset).returncode==2,'plane outside Walker grid -> Config(2)'
     assert spred(pathlib.Path(tmp)/'walk_dup','--config',str(wdir/'dup.xml'),'--settings',exset).returncode==2,'duplicate (plane,slot) -> Config(2)'
+    # ---- T2.1: full per-satellite override (elements + <radio> + <phys>) parses and changes products ----
+    (wdir/'full.xml').write_text(src.replace('  </layer>','    <satellite plane="0" slot="2" a_km="7500" e="0.001" inc_deg="60" raan_deg="10" u_deg="20" argp_deg="30" name="FULL"><radio uplink_bps="100000000" downlink_bps="100000000" antennas="4"/><phys mass_kg="200" drag_area_m2="5" cd="2.5" srp_area_m2="5" cr="1.5" source="documented" reference="t2"/></satellite>\n  </layer>'))
+    fu=spred(pathlib.Path(tmp)/'walk_full','--config',str(wdir/'full.xml'),'--settings',exset);assert fu.returncode==0,fu.stderr
+    assert dpayload(pathlib.Path(tmp)/'walk_full')!=dpayload(pathlib.Path(tmp)/'ext_base'),'per-satellite elements/phys override must change the state product'
+    (wdir/'radio1.xml').write_text(src.replace('  </layer>','    <satellite plane="0" slot="2" name="A"><radio uplink_bps="100000000" downlink_bps="100000000" antennas="4"/></satellite>\n  </layer>'))
+    (wdir/'radio2.xml').write_text(src.replace('  </layer>','    <satellite plane="0" slot="2" name="A"><radio uplink_bps="500000000" downlink_bps="500000000" antennas="4"/></satellite>\n  </layer>'))
+    _g=[]
+    for _x in ('radio1','radio2'):
+        _o=pathlib.Path(tmp)/('sn_'+_x)
+        _r=subprocess.run([str(bin/('satnet'+suffix)),'--output',str(_o),'--satellites',str(wdir/(_x+'.xml')),'--nodes',str(bin/'examples'/'nodes.xml'),'--duration','60','--package','60','--threads','2'],env=env,capture_output=True,text=True)
+        assert _r.returncode==0,_r.stderr
+        _g.append(sorted((_o/'graphs').glob('*.ngb'))[0].read_bytes())
+    assert _g[0]!=_g[1],'per-satellite <radio> override must change the link/graph product'
+    # ---- T2.2: <satellite plane="0"> without slot -> smallest unused slot in that plane ----
+    (wdir/'slot.xml').write_text(src.replace('  </layer>','    <satellite plane="0" slot="0" name="S0"/>\n    <satellite plane="0" name="S1"/>\n  </layer>'))
+    sl=spred(pathlib.Path(tmp)/'walk_slot','--config',str(wdir/'slot.xml'),'--settings',exset);assert sl.returncode==0,sl.stderr
+    sm=manifest(pathlib.Path(tmp)/'walk_slot')['catalog']['members']
+    assert [(sm[0]['name'],sm[0]['slot']),(sm[1]['name'],sm[1]['slot'])]==[('S0',0),('S1',1)],sm[:2]
+    # ---- T2.3: Walker geometry_sha256 stays base (6 elements); override enters config/run_id only ----
+    assert manifest(pathlib.Path(tmp)/'walk_full')['inputs']['geometry_sha256']==bm['inputs']['geometry_sha256'],'Walker geometry_sha256 must stay base'
+    assert manifest(pathlib.Path(tmp)/'walk_full')['inputs']['config_sha256']!=bm['inputs']['config_sha256'] and manifest(pathlib.Path(tmp)/'walk_full')['run']['run_id']!=bm['run']['run_id'],'override must enter config_sha256/run_id'
 
 
     # ---- v3.5 orbit_engine appendix-D diagnostic protocol (SDD appendix D) ----
@@ -137,10 +209,37 @@ with tempfile.TemporaryDirectory(prefix='satpred test ') as tmp:
     assert struct.pack('<6d',*r2['slices'][0]['q'])==struct.pack('<6d',*r['slices'][1]['q']),'window continuation must overlap bit-exactly'
     fj=json.loads(r2['result']['json'])
     assert r2['result']['failures']==1 and len(fj)==1 and fj[0]['index']==1 and fj[0]['reason']=='verify' and 'global_index' not in fj[0],fj
+    # ---- T3.1: request.json unknown / missing field -> Config(2) ----
+    _rq=json.loads(req.read_text())
+    _u=dict(_rq);_u['bogus']=1;(ddir/'unknown.json').write_text(json.dumps(_u));diag(ddir/'unknown.json',exit=2)
+    _mf=dict(_rq);_mf.pop('M');(ddir/'missingfield.json').write_text(json.dumps(_mf));diag(ddir/'missingfield.json',exit=2)
+    # ---- T3.3a: M=1 emits only the initial slice frame, no integration advance ----
+    req1=diag_assets.build_diag(ddir/'m1',m=1)
+    r1=diag_assets.parse_orbst01(diag(req1).stdout)
+    assert r1['M']==1 and len(r1['slices'])==1,r1
+    assert r1['slices'][0]['global_index']==0 and r1['slices'][0]['t_ns']==diag_assets.RUN_START_NS
+    assert r1['slices'][0]['q']==list(diag_assets.default_states()[0][0]),'M=1 must echo the initial state and not advance'
+    # ---- T3.3b: a numeric failure records global_index/substep/stage ----
+    huge=((0.0,7.0e6,0.0,1.0e200,0.0,0.0),(150.0,6.0,2.2,6.0,1.3))
+    reqf=diag_assets.build_diag(ddir/'fail',m=2,flags=4,states=[st[0],huge])
+    rf=diag_assets.parse_orbst01(diag(reqf).stdout)
+    fjson=json.loads(rf['result']['json'])
+    assert rf['result']['failures']==1 and len(fjson)==1,fjson
+    assert (fjson[0]['index'],fjson[0]['global_index'],fjson[0]['substep'],fjson[0]['stage'])==(1,1,0,0),fjson
     assert subprocess.run([str(bin/('orbit_engine'+suffix))],env=env,capture_output=True).returncode==1,'no request -> Arg(1)'
     assert subprocess.run([str(bin/('orbit_engine'+suffix)),str(ddir/'absent.json')],env=env,capture_output=True).returncode==3,'missing request -> Io(3)'
     bad=bytearray((ddir/'states.sbin').read_bytes());bad[100]^=1;(ddir/'corrupt.sbin').write_bytes(bytes(bad))
     (ddir/'corrupt.json').write_text(json.dumps(dict(json.loads(req.read_text()),states_file='corrupt.sbin')))
     diag(ddir/'corrupt.json',exit=7)
+    # ---- T4.1: --backend auto selects cuda when a device is usable, else cpu + warning ----
+    auto=satnet_raw('satnet','--backend','auto',out=pathlib.Path(tmp)/'gpu_auto');assert auto.returncode==0,auto.stderr
+    _am=json.loads((pathlib.Path(tmp)/'gpu_auto'/'manifest.json').read_text())
+    if cu.returncode==0:
+        assert _am['software']['actual_backend']=='cuda' and _am['gpu_candidate_eval']['max_distance_deviation_m']==0,'auto must select cuda when a device is usable'
+    else:
+        assert _am['software']['actual_backend']=='cpu' and any('CUDA unavailable' in w for w in _am['warnings']),'auto must fall back to cpu with a warning'
+    # ---- T4.2: SATPRED_CUDA OFF|AUTO|ON three-state build switch ----
+    _cmk=(pathlib.Path(__file__).resolve().parent.parent/'CMakeLists.txt').read_text()
+    assert 'set(SATPRED_CUDA OFF CACHE STRING "OFF AUTO ON")' in _cmk and 'SATPRED_CUDA=ON but nvcc was not found' in _cmk and 'SP_CUDA=1' in _cmk,'SATPRED_CUDA OFF|AUTO|ON switch must be present'
 
     print(json.dumps(dict(status='PASS',summary=summary,l2_01_annotation='PASS',l2_01b_fast_path='PASS',state_file_regression='PASS',external_data='PASS',walker_override='PASS',orbit_engine_appendix_d='PASS')))
