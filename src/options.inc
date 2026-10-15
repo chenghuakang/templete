@@ -106,7 +106,6 @@ namespace unified {
         need(val(o,"queue-capacity")>=1&&val(o,"queue-capacity")<=UINT32_MAX,1,"queue","range");
         need(val(o,"max-hops")>=1&&val(o,"max-hops")<=32&&val(o,"traceroute-probes")>=1&&val(o,"traceroute-probes")<=3,1,"trace","bounds");
         need(val(o,"probe-packet-bytes")>=28&&val(o,"probe-packet-bytes")<=9000,1,"probe bytes","range");
-        need(val(o,"satellite-processing-us")<=1000000,1,"processing","satellite processing range (0..1000000 us)");
         duration(o,"trace-retry-interval-s");
         need(val(o,"trace-retry-max")<=1000000,1,"trace retry","range (0..1000000)");
         need(o.v.at("tool-start-jitter")=="disabled"||o.v.at("tool-start-jitter")=="enabled",1,"tool start jitter","disabled|enabled");

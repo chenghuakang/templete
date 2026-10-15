@@ -82,6 +82,14 @@ namespace unified {
         x^=x>>30;x*=0xbf58476d1ce4e5b9ULL;x^=x>>27;x*=0x94d049bb133111ebULL;x^=x>>31;
         return x%5000000001ULL;   // 0..5 s inclusive
     }
+    // Extra per-hop delay = transmission (serialization) time = length / actual bandwidth.
+    // The packet is put on the link at that link's bandwidth, so the value is bandwidth-derived
+    // (never a fixed constant) and differs per hop.
+    U serialization_ns(U bytes,U capacity_bps){
+        need(capacity_bps>0,5,"bandwidth","zero link capacity");
+        U num=mul(mul(bytes,8),1000000000ULL);
+        return num/capacity_bps+(num%capacity_bps!=0);
+    }
     class Simulation{
         Options opts;
         Topology&input;
@@ -233,17 +241,18 @@ namespace unified {
                 flow_path=route(src);
                 bottleneck=flow_path.empty()?0:UINT64_MAX;
                 path_delay=0;
-                // End-to-end latency is read from the simulated clock, not a precomputed total:
-                // the clock is advanced hop by hop (propagation + satellite processing) and the
-                // value reported is the difference between departure and arrival instants.
-                U hop_processing_ns=mul(val(opts,"satellite-processing-us"),1000);
-                U clock_advance_ns=0;
+                // End-to-end latency is read from the simulated clock: each hop advances it by the
+                // propagation delay plus the transmission (serialization) delay of the packet on
+                // that link, i.e. transmission length / actual bandwidth = extra delay per hop.
+                U clock_advance_ns=0,propagation_ns=0,transmission_ns=0;
                 for(size_t i=1;i<flow_path.size();++i){
                     auto l=tr::edge(graph,flow_path[i-1],flow_path[i]);
                     need(bool(l),5,"route","edge absent");
                     bottleneck=std::min(bottleneck,l->capacity_bps);
-                    clock_advance_ns=add(clock_advance_ns,l->delay_ns);
-                    if(hop_processing_ns)clock_advance_ns=add(clock_advance_ns,hop_processing_ns);
+                    U tx=serialization_ns(payload,l->capacity_bps);
+                    propagation_ns=add(propagation_ns,l->delay_ns);
+                    transmission_ns=add(transmission_ns,tx);
+                    clock_advance_ns=add(clock_advance_ns,add(l->delay_ns,tx));
                 }
                 path_delay=flow_path.empty()?0:clock_advance_ns;
                 if(!flow_path.empty()){measured_latency_ns+=path_delay;++measured_latency_count;}
@@ -253,10 +262,11 @@ namespace unified {
                     for(U n:flow_path)p["path"].a.emplace_back(n);
                     p["reachable"]=!flow_path.empty();
                     p["bottleneck_bps"]=bottleneck;
-                    p["propagation_delay_ns"]=path_delay;
+                    p["propagation_delay_ns"]=propagation_ns;
+                    p["transmission_delay_ns"]=transmission_ns;
                     p["one_way_delay_ns"]=path_delay;
                     p["hop_count"]=U(flow_path.size());
-                    p["satellite_processing_ns"]=hop_processing_ns;
+                    p["packet_bytes"]=payload;
                     log("route_change",p);
                 }
             }
@@ -592,7 +602,7 @@ namespace unified {
             else if(e.kind==EventKind::FlowEnd)arrival_rate=std::max<long double>(0,arrival_rate-e.rate);
             else if(e.kind==EventKind::ProbeComplete)commit_probe(e.probe);
         }
-        public: Simulation(Options o,Topology&i,OutputNames n,fs::path output,I first,I last):opts(std::move(o)),input(i),names(std::move(n)),out(std::move(output)),begin(first),end(last),now(first),next_topology(first),next_report(first),next_probe(first),report_begin(first),src(endpoint(i.nodes,opts.v.at("traffic-src"))),dst(endpoint(i.nodes,opts.v.at("traffic-dst"))),offer(val(opts,"traffic-rate-bps")),payload(val(opts,"traffic-packet-bytes")),capacity(val(opts,"queue-capacity")),maxh(val(opts,"max-hops")),budget(val(opts,"memory-budget-bytes")),packet_mode(opts.v.at("bandwidth-model")=="packet"),source{first,last,[&i](I t){return i.at(t);},[&i,last](I t){auto next=i.next(t);return next&&*next<last?next:std::optional<I>{};}},trace_config{unsigned(maxh),unsigned(val(opts,"traceroute-probes")),U(duration(opts,"traceroute-timeout-s")),unsigned(val(opts,"probe-packet-bytes")),56,opts.v.at("probe-serialization")=="enabled",U(val(opts,"satellite-processing-us")*1000)},tracer(source,trace_config){
+        public: Simulation(Options o,Topology&i,OutputNames n,fs::path output,I first,I last):opts(std::move(o)),input(i),names(std::move(n)),out(std::move(output)),begin(first),end(last),now(first),next_topology(first),next_report(first),next_probe(first),report_begin(first),src(endpoint(i.nodes,opts.v.at("traffic-src"))),dst(endpoint(i.nodes,opts.v.at("traffic-dst"))),offer(val(opts,"traffic-rate-bps")),payload(val(opts,"traffic-packet-bytes")),capacity(val(opts,"queue-capacity")),maxh(val(opts,"max-hops")),budget(val(opts,"memory-budget-bytes")),packet_mode(opts.v.at("bandwidth-model")=="packet"),source{first,last,[&i](I t){return i.at(t);},[&i,last](I t){auto next=i.next(t);return next&&*next<last?next:std::optional<I>{};}},trace_config{unsigned(maxh),unsigned(val(opts,"traceroute-probes")),U(duration(opts,"traceroute-timeout-s")),unsigned(val(opts,"probe-packet-bytes")),56,opts.v.at("probe-serialization")=="enabled"},tracer(source,trace_config){
             business.open(out/(names.file("business","jsonl")+".part"),std::ios::binary);
             stats.open(out/(names.file("statistics","jsonl")+".part"),std::ios::binary);
             trace_text.open(out/(names.file("traceroute","txt")+".part"),std::ios::binary);
