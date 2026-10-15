@@ -8,7 +8,7 @@
 #include "options.inc"
 #include "runtime_io.inc"
 #include "handover.inc"
-#include "parallel_sim.inc"
+#include "pdes.inc"
 #include <cctype>
 #include <memory>
 #include <queue>
@@ -109,7 +109,9 @@ namespace unified {
         std::priority_queue<Event,std::vector<Event>,Compare>events;
         std::map<U,LinkState>links;
         std::map<U,std::vector<tr::Node>>route_cache;
-        std::unique_ptr<ParallelPacketEngine>engine;
+        std::unique_ptr<PdesEngine>engine;
+        struct ReportSnap{I start=0,end=0;bool reachable=false;U bottleneck=0;};
+        std::vector<ReportSnap>report_snaps;
         std::vector<tr::Node>flow_path;
         U bottleneck=0,path_delay=0;
         long double generated_bits=0,delivered_bits=0,unserved_bits=0,arrival_rate=0,report_generated=0,report_delivered=0,report_unserved=0;
@@ -272,7 +274,7 @@ namespace unified {
                     log("route_change",p);
                 }
             }
-            if(engine){ engine->on_topology_change(graph,now); }
+            if(engine){ engine->broadcast_graph(graph,now); }
             else{
             std::map<U,tr::Link>fresh;
             for(auto&e:graph.edges)fresh[(U(e.src)<<32)|e.dst]=e;
@@ -386,6 +388,33 @@ namespace unified {
             report_delivered=delivered_bits;
             report_unserved=unserved_bits;
             report_begin=now;
+        }
+        // Decentralised statistics: the control participant records only the boundary metadata while it
+        // walks the control timeline; the packet counters are read back from the per-interval worker
+        // accumulators after every worker has finished, so the rows stay exact without a global barrier.
+        void snapshot_stats(){
+            if(now<=report_begin)return;
+            report_snaps.push_back(ReportSnap{report_begin,now,!flow_path.empty(),bottleneck});
+            report_begin=now;
+        }
+        void flush_stats(){
+            if(!engine)return;
+            for(size_t i=0;i<report_snaps.size();++i){
+                auto iv=engine->interval_totals(i);
+                long double dt=static_cast<long double>(report_snaps[i].end-report_snaps[i].start)/1e9L;
+                J j=J::obj();
+                j["sim_timestamp_ns"]=report_snaps[i].end;
+                j["interval_start_ns"]=report_snaps[i].start;
+                j["interval_end_ns"]=report_snaps[i].end;
+                j["offered_payload_bytes"]=double((long double)iv.generated*payload);
+                j["delivered_payload_bytes"]=double((long double)iv.delivered*payload);
+                j["unserved_payload_bytes"]=double((long double)iv.dropped*payload);
+                j["goodput_bps"]=dt>0?double((long double)iv.delivered*payload*8/dt):0.0;
+                j["route_reachable"]=report_snaps[i].reachable;
+                j["bottleneck_bps"]=report_snaps[i].bottleneck;
+                stats<<j.dump()<<'\n';
+            }
+            need(bool(stats),3,"stats","write failed");
         }
         // iperf3-compat-v1: real TCP loopback measurement result
         struct IperfMeasurement {
@@ -635,7 +664,7 @@ namespace unified {
             // Parallel packet scheduler (SDD §1.4/§7.4): auto-detected worker count, nodes assigned
             // round-robin by label (owner(n)=n%T). Fluid mode has no per-packet events, so the
             // sequential commit path is kept unchanged there.
-            if(packet_mode)engine=std::make_unique<ParallelPacketEngine>(sim_thread_count(),src,dst,offer,payload,capacity,maxh,budget,begin,end,flow_start_ns);
+            if(packet_mode)engine=std::make_unique<PdesEngine>(sim_thread_count(),src,dst,offer,payload,capacity,maxh,budget,begin,end,flow_start_ns,begin+I(start_offset_stats_ns),U(duration(opts,"report-interval-s")));
             // Diagnostic only (never part of the output format): HSN_SIM_THREADS_DEBUG=1 prints the
             // worker count and the node -> worker assignment used by the parallel packet scheduler.
             if(engine&&std::getenv("HSN_SIM_THREADS_DEBUG")){
@@ -675,12 +704,11 @@ namespace unified {
                 I next=std::min({end,next_topology,next_report});
                 if(!events.empty())next=std::min(next,events.top().time);
                 if(!tracing&&next_probe>now)next=std::min(next,next_probe);
-                if(engine)next=std::min(next,engine->earliest());
                 need(next>=now,5,"loop","time regression");
                 integrate(next);
                 now=next;
                 if(now==end){
-                    stats_row();
+                    if(engine)snapshot_stats();else stats_row();
                     break;
                 }
                 if(now==next_topology)activate();
@@ -691,13 +719,14 @@ namespace unified {
                     events.pop();
                     dispatch(std::move(e));
                 }
-                if(engine)engine->run_timestamp(now);
                 if(!tracing&&now>=next_probe){if(retry_remaining)begin_retry();else begin_trace();}
                 if(now==next_report){
-                    stats_row();
+                    if(engine)snapshot_stats();else stats_row();
                     next_report=later(U(duration(opts,"report-interval-s")));
                 }
             }
+            // Release the decentralised workers and wait for global quiescence (live event count 0).
+            if(engine){ engine->start(); engine->wait_quiescent(); flush_stats(); }
             // end is exclusive: pending completion at exactly end is censored, not a timeout.
             if(tracing){
                 active_trace.censored=true;
@@ -738,6 +767,7 @@ namespace unified {
                 for(auto&[key,l]:links)censored+=l.queue.size()+(l.busy?1:0);
             }
             if(packet_mode){
+                generated_bits=static_cast<long double>(generated_packets)*payload*8;
                 delivered_bits=static_cast<long double>(delivered_packets)*payload*8;
                 unserved_bits=static_cast<long double>(dropped_packets)*payload*8;
             }

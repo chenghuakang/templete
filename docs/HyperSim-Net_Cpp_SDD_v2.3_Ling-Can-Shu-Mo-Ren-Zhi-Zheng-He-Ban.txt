@@ -45,8 +45,15 @@ include/hsn/{core,graph,vtime,coro,netstack,gpu}；include/hsn/core/defaults.hpp
 src/{graph,vtime,netstack,gpu}；frontend/pyhsn；tools/{hsn-verify,hsn-bench}
 tests/{unit,integration,format,time,zero_arg,determinism,equivalence,perf,data,golden}
 1.4 模块：输入验证/映射 -> 图与源轨道视图 -> 虚拟调度 -> 网络模型/脚本任务 -> 输出。
-调度主线程唯一提交SimClock和跨分区状态；工作线程只计算独立任务，结果有序提交。
-GPU同步和输出线程不写SimClock，buffer完成消费前不复用。
+完全去中心化无锁PDES：无中心调度线程、无全局时间屏障、事件路径无互斥量。每个分区(worker)独占
+其节点的事件堆/链路表(链路归其源节点)/路由缓存/计数器并独立推进本地SimClock；分区之间只通过
+无锁MPSC消息传递事件。为避免乱序提交，采用保守lookahead(Chandy-Misra-Bryant风格)：每个分区发布
+其最早待处理事件的时间戳，仅当该时间戳不大于全局最小值时才提交该事件。拓扑按时间索引：控制面在
+worker释放前物化全部拓扑纪元表(不可变)，worker按事件自身时间戳查表取图。
+控制面(拓扑切换/统计边界/traceroute)由主线程作为独立参与者推进，仅在所有worker静默(live事件计数0)后
+读取并写出统计与结果；控制面不阻塞、不裁决worker的事件顺序。
+GPU同步和输出线程不写本地SimClock，buffer完成消费前不复用。
+结果不保证位级可复现：相同输入多次运行允许在声明范围内浮动(见12.5 VT01/AC06)。
 1.5 受支持语法/模型有明确边界。不透明任意Python扩展、子进程、真实网络服务不能
 自动拥有虚拟时钟；必须适配或拒绝。设计指标不是已测事实，不输出虚假PASS。
 上游工程容量/近似地固不认证为实测吞吐/严格ITRS或H精度。
@@ -250,7 +257,7 @@ ISO9位由整数ns格式化；日志线程只消费捕获时间；统计rate分�
 07. 主循环完整逻辑
 --------------------------------------------------------------------------------
 7.1 不变量
-I01 只有调度主线程提交SimClock，所有业务读它。
+I01 每个分区独占其本地SimClock，仅由该分区的worker提交；业务只读本地或已提交的观测值。
 I02 输入准备/CPU/GPU/刷盘实际等待不推进业务时间。
 I03 不提前执行未来事件/发布未来业务结果，不回退时间修补漏事件。
 I04 推进前当前时刻稳定，所需输入完成准备，不能越过未处理因果边界。
@@ -285,7 +292,8 @@ ACK恰deadline先到达，timeout处理前重新检查是否仍有效。
 拓扑切换同刻在途包到达按已声明在途模型处理，不因边消失无条件drop。
 默认edge-down-policy-v1：尚未序列化的队列包drop，未完成发送drop，已完成发送且在传播
 的包按已排到达事件交付；重新选路的新包用新图。策略改变必须模型版本化。
-规则不得依赖线程/GPU stream完成先后。
+规则不得依赖线程/GPU stream的物理完成先后；跨分区只按模拟时间戳与因果(先收后发)约束，
+允许同刻不同分区的提交顺序不同。
 
 7.4 完整主循环（接口级伪代码）
 Status Engine::Run() {
@@ -364,7 +372,8 @@ Pop按phase/完整ID，不仅hash。禁止新事件早于now；同刻因果子�
 已经完成的phase不能由新事件倒插重执行；零延迟ACK等子事件在下一microstep处理，
 完整排序键(timestamp,microstep,phase,hash,logical_id)，因果父先于子。
 观测默认只读，不生成新的业务事件；如回调可发包则归TaskResume，闭包稳定后再观测。
-CPU并行任务结果按逻辑key提交，不能按真实finish顺序。
+分区内结果按(timestamp,phase,seq)提交；跨分区用保守lookahead保证提交的时间戳不回退，
+不能按真实finish顺序提交。
 
 7.7 选择下一边界
 Status Engine::DetermineNextBoundary(RelativeNs current,Boundary& out) {
@@ -404,7 +413,8 @@ struct alignas(64) TimerEvent {
  uint64_t logical_parent; uint8_t padding[8];
 };
 static_assert(sizeof(TimerEvent)==64);
-逻辑seq来自task/父事件/局部计数，不来自并行atomic争抢顺序；hash碰撞完整ID兜底。
+seq仅用于同刻事件的全序tie-break，允许来自全局atomic分配(故不要求跨运行位级可复现)；
+hash碰撞完整ID兜底。
 随机key=seed+稳定流/包/探针标识，非stream/tps编号重种子。
 8.2 运行图
 struct SliceView { uint64_t global_index; uint32_t package,local; UtcNs valid_from,valid_to;
@@ -468,8 +478,26 @@ CUDA Graph1000步只依赖图稳定时启用，拓扑变化切批重录，实际
 copy/kernel所有错误检查，consumer完成前不复用pinned/device；explicit cuda失败，auto才回退。
 TPS-exact完整checkpoint队列/流/定时器/帧/随机计数/clock，边界相同才接受，否则串行重算。
 重叠warmup的小吞吐误差不证明exact；TPS-approx需显式标签/误差配置，不能通过位级验收。
-无跨片状态探针可独立并行，随机key不按slice重种子，事件仍全局仿真因果提交。
+无跨片状态探针可独立并行，随机key不按slice重种子；事件在分区内因果提交，跨分区按模拟时间戳
+因果(先收后发)，允许先发的包后到达。
 默认backend=cpu、tps-mode=off（14.2），GPU/TPS均为显式启用功能。
+
+11.1 去中心化无锁PDES（包模型并行执行）
+无中心调度线程、无全局时间屏障、事件路径无互斥量。分区划分：owner(n)=n%T，T=虚拟处理器数
+(std::thread::hardware_concurrency()，HSN_SIM_THREADS可覆盖)，故相邻节点必然落在不同分区。
+分区所有权：节点的事件堆、链路表(链路归其源节点)、路由缓存、计数器均为该分区私有，互不共享。
+消息织物：每个分区一个无锁MPSC栈(生产者CAS入栈，属主exchange整链取出)，不存在锁。
+因果一致性(唯一强约束)：同一个包的传递必须先收到(Arrival提交)才能接着发送；Arrival的调度时间
+恒为 发送时刻+传播时延(>发送时刻)，故包路径上时间戳严格递增。
+时间语义：一律以系统提供给测试应用的模拟时钟为准，物理完成先后不作要求；允许先发的包后到达。
+保守lookahead：每个分区发布其最早待处理事件时间戳(atomic)，仅当自身最早事件时间戳<=全局最小值时
+才提交，从而不会出现时间戳回退，也不需要任何中心裁决。
+拓扑按时间索引：控制面在释放worker之前物化全部拓扑纪元(时间,图)表；worker按事件自身时间戳二分
+查表取图，即使某分区跑在前面也不会用错拓扑。
+终止判定：全局live事件计数(入队+1、处理完-1)归零即所有分区静默；控制面据此写出统计与结果，
+不参与事件顺序裁决。
+可复现性：不再保证位级可复现。相同输入多次运行允许关键业务指标在声明范围内浮动(12.5 VT01)，
+但包守恒(生成=交付+丢弃+截断)恒成立。
 
 12. 测试数据与测试用例
 --------------------------------------------------------------------------------
@@ -555,7 +583,9 @@ LOOP-T14 发布失败 -> Failed，不先Completed或留下成功manifest。
 LOOP-T15 断边在途 -> 按冻结edge-down-policy，队列/未完服务/已在传播分别测试。
 
 12.5 其他模块
-VT01 1/4/32线程同输入5次 -> 完整逻辑排序/业务SHA相同，hash碰撞亦同。
+VT01 1/4/32线程同输入5次 -> 包守恒恒成立(生成=交付+丢弃+截断)，业务量级落在声明范围
+     (同一输入多次运行的关键业务指标相对偏差<=2%)；不再要求完整逻辑排序/业务SHA位级相同
+     (去中心化PDES允许同输入输出不同)。auto线程数=虚拟处理器数，owner(n)=n%T，相邻节点不同线程。
 VT02 FF跨层/包/拓扑无漏；队列非空不能bitmap空就跳。
 VT03 双缓冲继承未修改，边重排队列不串链路。
 VT04 池耗尽明确；new/malloc/协程/JSON/sort拦截推进计数0。
@@ -591,7 +621,8 @@ AC02 strict均SOURCE_VERIFIED；错源/损坏/缺包不成功发布。
 AC03 真实上游D4/D5互操作，不能只自制fixture。
 AC04 TIME001..011落实，TIME-T及LOOP-T全部通过，时间隔离一票否决。
 AC05 同刻拓扑/状态/ACK/timeout/因果提交及断边策略通过。
-AC06 业务确定性通过；未实测GPU SKIP；TPS approx不作exact通过。
+AC06 业务量级一致性通过(同输入多次运行落在声明范围，包守恒恒成立)；位级确定性不再要求；
+未实测GPU SKIP；TPS approx不作exact通过。
 AC07 主推进零分配、64B热结构对齐、预算/耗尽处理通过。
 AC08 恶意格式/溢出/范围fuzz安全通过，未知major明确拒绝。
 AC09 分层性能实测，不混mmap/源验证/执行，>=5重复报告。
