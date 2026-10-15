@@ -8,6 +8,7 @@
 #include "options.inc"
 #include "runtime_io.inc"
 #include "handover.inc"
+#include "parallel_sim.inc"
 #include <cctype>
 #include <memory>
 #include <queue>
@@ -108,6 +109,7 @@ namespace unified {
         std::priority_queue<Event,std::vector<Event>,Compare>events;
         std::map<U,LinkState>links;
         std::map<U,std::vector<tr::Node>>route_cache;
+        std::unique_ptr<ParallelPacketEngine>engine;
         std::vector<tr::Node>flow_path;
         U bottleneck=0,path_delay=0;
         long double generated_bits=0,delivered_bits=0,unserved_bits=0,arrival_rate=0,report_generated=0,report_delivered=0,report_unserved=0;
@@ -270,6 +272,8 @@ namespace unified {
                     log("route_change",p);
                 }
             }
+            if(engine){ engine->on_topology_change(graph,now); }
+            else{
             std::map<U,tr::Link>fresh;
             for(auto&e:graph.edges)fresh[(U(e.src)<<32)|e.dst]=e;
             for(auto&[key,l]:links){
@@ -326,6 +330,7 @@ namespace unified {
                 links.emplace(key,std::move(l));
             }
             for(auto&[key,l]:links)start_link(key);
+            }
             if(!packet_mode&&bottleneck){
                 U rate=std::min(offer,bottleneck);
                 Event a;
@@ -352,6 +357,12 @@ namespace unified {
         }
         void stats_row(){
             if(packet_mode){
+                if(engine){
+                    auto t=engine->totals();
+                    generated_packets=t.generated; delivered_packets=t.delivered; dropped_packets=t.dropped;
+                    queue_drop=t.queue_drop; link_drop=t.link_drop;
+                    no_route_drop=t.no_route_drop; hop_drop=t.hop_drop; inflight=t.inflight;
+                }
                 generated_bits=static_cast<long double>(generated_packets)*payload*8;
                 delivered_bits=static_cast<long double>(delivered_packets)*payload*8;
                 unserved_bits=static_cast<long double>(dropped_packets)*payload*8;
@@ -621,6 +632,17 @@ namespace unified {
             next_probe=begin+I(start_offset_trace_ns);
             next_report+=I(start_offset_stats_ns);
             report_begin=begin+I(start_offset_stats_ns);
+            // Parallel packet scheduler (SDD §1.4/§7.4): auto-detected worker count, nodes assigned
+            // round-robin by label (owner(n)=n%T). Fluid mode has no per-packet events, so the
+            // sequential commit path is kept unchanged there.
+            if(packet_mode)engine=std::make_unique<ParallelPacketEngine>(sim_thread_count(),src,dst,offer,payload,capacity,maxh,budget,begin,end,flow_start_ns);
+            // Diagnostic only (never part of the output format): HSN_SIM_THREADS_DEBUG=1 prints the
+            // worker count and the node -> worker assignment used by the parallel packet scheduler.
+            if(engine&&std::getenv("HSN_SIM_THREADS_DEBUG")){
+                std::cerr<<"hsn-sim-threads threads="<<engine->threads()<<" owner(n)=n%"<<engine->threads()<<" map=";
+                for(size_t i=0;i<input.nodes.a.size();++i)std::cerr<<i<<":"<<(i%engine->threads())<<(i+1<input.nodes.a.size()?",":"");
+                std::cerr<<'\n';
+            }
         }
         J run(){
             activate();
@@ -636,11 +658,14 @@ namespace unified {
                 p["rate_bps"]=offer;
                 log("flow_start",p);
                 if(packet_mode){
+                    if(engine)engine->seed();
+                    else{
                     Event e;
                     e.time=std::max(now,flow_start_ns);
                     e.kind=EventKind::Generate;
                     e.phase=EventPhase::Traffic;
                     schedule(e);
+                    }
                 }
                 // Startup jitter: the first traceroute round waits for begin+offset_traceroute.
                 if(next_probe<=now)begin_trace();
@@ -650,6 +675,7 @@ namespace unified {
                 I next=std::min({end,next_topology,next_report});
                 if(!events.empty())next=std::min(next,events.top().time);
                 if(!tracing&&next_probe>now)next=std::min(next,next_probe);
+                if(engine)next=std::min(next,engine->earliest());
                 need(next>=now,5,"loop","time regression");
                 integrate(next);
                 now=next;
@@ -665,6 +691,7 @@ namespace unified {
                     events.pop();
                     dispatch(std::move(e));
                 }
+                if(engine)engine->run_timestamp(now);
                 if(!tracing&&now>=next_probe){if(retry_remaining)begin_retry();else begin_trace();}
                 if(now==next_report){
                     stats_row();
@@ -699,8 +726,17 @@ namespace unified {
                 }
                 need(residual_rate==0,5,"fluid","unclosed arrival segment");
             }
-            U censored=inflight;
-            for(auto&[key,l]:links)censored+=l.queue.size()+(l.busy?1:0);
+            U censored=0;
+            if(engine){
+                auto t=engine->totals();
+                generated_packets=t.generated; delivered_packets=t.delivered; dropped_packets=t.dropped;
+                queue_drop=t.queue_drop; link_drop=t.link_drop;
+                no_route_drop=t.no_route_drop; hop_drop=t.hop_drop; inflight=t.inflight; censored=t.censored;
+            }
+            else{
+                censored=inflight;
+                for(auto&[key,l]:links)censored+=l.queue.size()+(l.busy?1:0);
+            }
             if(packet_mode){
                 delivered_bits=static_cast<long double>(delivered_packets)*payload*8;
                 unserved_bits=static_cast<long double>(dropped_packets)*payload*8;

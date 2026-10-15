@@ -14,6 +14,7 @@ cases = [('options_and_event_order', [bin/('test_options'+sx)]),
          ('hash_time_selftest', [bin/('hypersim'+sx), '--selftest']),
          ('upstream_regression', [sys.executable, root/'satpred/tests/regression.py', bin]),
          ('unified_integration', [sys.executable, root/'tests/regression.py', bin, rep/'integration']),
+         ('parallel_threads', [sys.executable, root/'tests/parallel_threads.py', bin, rep/'parallel_threads']),
          ('startup_jitter', [sys.executable, root/'tests/startup_jitter.py', bin, rep/'startup_jitter'])]
 if not args.skip_default_flow:
     cases.append(('default_flow_clean_env', [sys.executable, root/'tests/default_flow.py', bin, rep/'default']))
