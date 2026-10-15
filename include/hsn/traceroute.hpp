@@ -22,9 +22,9 @@ struct Source{
     std::function<Graph(Ns)> at;
     std::function<std::optional<Ns>(Ns)> next_transition;
 };
-struct Config{unsigned max_hops=32,probes=3;U timeout_ns=5000000000ULL;unsigned packet_bytes=60,icmp_bytes=56;bool serialization=true;U processing_ns=0;};
+struct Config{unsigned max_hops=30,probes=3;U timeout_ns=5000000000ULL;unsigned packet_bytes=60,icmp_bytes=56;bool serialization=true;U processing_ns=0;};
 enum class Status{Reply,Timeout,Censored};
-struct Probe{Status status=Status::Timeout;unsigned ttl=0,index=0;Ns sent_ns=0,finished_ns=0;std::optional<Node>responder;std::optional<U>rtt_ns;bool destination_reply=false;std::string detail;};
+struct Probe{Status status=Status::Timeout;unsigned ttl=0,index=0;Ns sent_ns=0,finished_ns=0;std::optional<Node>responder;std::optional<U>rtt_ns;bool destination_reply=false;std::string detail,code;};
 struct Row{unsigned ttl;std::vector<Probe>probes;};
 struct Result{Node src,dst;Ns issued_ns,finished_ns;bool reached=false,censored=false;std::vector<Row>rows;};
 inline std::string ip(Node id){return "10."+std::to_string((id>>16)&255)+"."+std::to_string((id>>8)&255)+"."+std::to_string(id&255);}
@@ -123,8 +123,22 @@ public:
         for(auto&row:r.rows){
             // A censored/incomplete TTL is not printed as fake timeout stars.
             if(row.probes.size()!=cfg.probes||std::any_of(row.probes.begin(),row.probes.end(),[](auto&p){return p.status==Status::Censored;}))break;
-            out<<std::setw(2)<<row.ttl;std::optional<Node>last;
-            for(auto&p:row.probes){if(p.status==Status::Timeout)out<<"  *";else{if(!p.responder||!p.rtt_ns)throw Error("reply lacks address/RTT");if(last!=p.responder){out<<"  "<<ip(*p.responder)<<" ("<<ip(*p.responder)<<")";last=p.responder;}out<<"  "<<milliseconds(*p.rtt_ns)<<" ms";}}
+            // Layout is byte-for-byte that of traceroute(8): "%2d  " then one probe field per
+            // probe joined by a single space. A timeout is "*"; a reply is "addr  rtt ms" and the
+            // address is repeated only when the responder changes (otherwise one extra space);
+            // an ICMP unreachable code is appended as " !H" / " !N" / " !X" / " !<num>".
+            out<<std::setw(2)<<row.ttl<<"  ";
+            std::optional<Node>last;
+            for(size_t i=0;i<row.probes.size();++i){
+                const auto&p=row.probes[i];
+                if(i)out<<' ';
+                if(p.status==Status::Timeout){out<<'*';continue;}
+                if(!p.responder||!p.rtt_ns)throw Error("reply lacks address/RTT");
+                if(last!=p.responder){out<<ip(*p.responder)<<" ("<<ip(*p.responder)<<")  ";last=p.responder;}
+                else out<<' ';
+                out<<milliseconds(*p.rtt_ns)<<" ms";
+                if(!p.code.empty())out<<' '<<p.code;
+            }
             out<<'\n';
         }return out.str();
     }

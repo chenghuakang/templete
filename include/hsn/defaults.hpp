@@ -18,7 +18,7 @@ inline constexpr std::array defaults{
  Default{"traffic-packet-bytes","1200","U64","B","Traffic","1..mtu-28",true},
  Default{"queue-capacity","100","U64","packets","Network","1..2^32-1",true},
  Default{"mtu","1500","U64","B","Network","576..9000",true},
- Default{"max-hops","32","U64","","Network","1..32",true},
+ Default{"max-hops","30","U64","","Network","1..32",true},
  Default{"traceroute-probes","3","U64","","Measure","1..3",true},
  Default{"traceroute-timeout-s","5","Seconds","s","Measure",">0",true},
  Default{"probe-interval-s","10","Seconds","s","Measure",">0",true},

@@ -1,13 +1,13 @@
 #include "hsn/reader_internal.hpp"
 namespace fixedtrace {
     int run(int argc,char**argv){
-        std::map<std::string,std::string>opts={{"src","default"},{"dst","default"},{"start","default"},{"max-hops","32"},{"probes","3"},{"timeout-s","5"},{"packet-bytes","60"},{"serialization","enabled"},{"output","stdout"},{"json","none"},{"memory-budget-bytes","268435456"}};
+        std::map<std::string,std::string>opts={{"src","default"},{"dst","default"},{"start","default"},{"max-hops","30"},{"probes","3"},{"timeout-s","5"},{"packet-bytes","60"},{"serialization","enabled"},{"output","stdout"},{"json","none"},{"memory-budget-bytes","268435456"}};
         std::set<std::string>seen;
         fs::path input;
         for(int i=1;i<argc;++i){
             std::string a=argv[i];
             if(a=="--help"){
-                std::cout<<"hsn-traceroute <SATNET-run|manifest|graph.ngb> [--src id] [--dst id] [--start ISO] [--max-hops 32] [--probes 3] [--timeout-s 5] [--serialization enabled|disabled] [--output stdout|file] [--json file]\n";
+                std::cout<<"hsn-traceroute <SATNET-run|manifest|graph.ngb> [--src id] [--dst id] [--start ISO] [--max-hops 30] [--probes 3] [--timeout-s 5] [--serialization enabled|disabled] [--output stdout|file] [--json file]\n";
                 return 0;
             }
             if(a.rfind("--",0)!=0){
